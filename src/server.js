@@ -7,16 +7,25 @@ const helmet = require('helmet');
 const app = express();
 
 app.use(helmet());
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+const allowedOrigins = [
+  'https://barakah-client-eta.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  ...(process.env.CLIENT_URL || '')
   .split(',')
   .map(origin => origin.trim())
-  .filter(Boolean);
-app.use(cors({
+  .filter(Boolean),
+];
+const corsOptions = {
   origin: (requestOrigin, callback) => {
     if (!requestOrigin || allowedOrigins.includes(requestOrigin)) callback(null, true);
     else callback(new Error('Origin not allowed by CORS'));
   },
-}));
+  credentials: false,
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Basic Route for testing
