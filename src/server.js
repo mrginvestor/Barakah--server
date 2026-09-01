@@ -7,7 +7,16 @@ const helmet = require('helmet');
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173' }));
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: (requestOrigin, callback) => {
+    if (!requestOrigin || allowedOrigins.includes(requestOrigin)) callback(null, true);
+    else callback(new Error('Origin not allowed by CORS'));
+  },
+}));
 app.use(express.json());
 
 // Basic Route for testing
