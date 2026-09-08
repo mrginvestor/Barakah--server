@@ -8,6 +8,8 @@ const app = express();
 
 app.use(helmet());
 const allowedOrigins = [
+  'https://www.halalwealth.finance',
+  'https://halalwealth.finance',
   'https://barakah-client-eta.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -18,14 +20,21 @@ const allowedOrigins = [
 ];
 const corsOptions = {
   origin: (requestOrigin, callback) => {
-    if (!requestOrigin || allowedOrigins.includes(requestOrigin)) callback(null, true);
-    else callback(new Error('Origin not allowed by CORS'));
+    if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+      callback(null, true);
+      return;
+    }
+
+    console.warn(`Blocked CORS request from origin: ${requestOrigin}`);
+    callback(new Error('Origin not allowed by CORS'));
   },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: false,
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 
 // Basic Route for testing
