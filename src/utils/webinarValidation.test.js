@@ -12,9 +12,6 @@ test('accepts a valid webinar registration payload', () => {
     businessWebsite: 'https://www.rahmanventures.com',
     businessRole: 'Founder / Owner',
     businessType: 'Technology / IT',
-    businessAge: '3–5 years',
-    employeeCount: '11–25',
-    annualTurnover: '₹1 – ₹5 Crores',
     financialInterests: ['Business Financial Planning', 'Cash Flow Management'],
     financialChallenge: 'Cash flow volatility during seasonal demand cycles.',
     referralSource: 'LinkedIn',
@@ -36,8 +33,6 @@ test('rejects invalid business website and missing consent', () => {
     businessWebsite: 'not-a-url',
     businessRole: 'Founder / Owner',
     businessType: 'Technology / IT',
-    businessAge: '3–5 years',
-    employeeCount: '11–25',
     financialInterests: [],
     referralSource: 'LinkedIn',
     consent: false,
@@ -49,3 +44,25 @@ test('rejects invalid business website and missing consent', () => {
   assert.match(result.errors.financialInterests, /at least one/i);
   assert.match(result.errors.consent, /agree/i);
 });
+
+test('accepts custom specified answers when other options are chosen', () => {
+  const payload = {
+    fullName: 'Zainab Fatima',
+    phone: '+919876543210',
+    email: 'zainab@custombusiness.com',
+    city: 'Bangalore',
+    businessName: 'Fatima Sustainable Design',
+    businessWebsite: 'https://fatimadesign.com',
+    businessRole: 'Chief Creative Officer',
+    businessType: 'Sustainable Architecture & Design',
+    financialInterests: ['Business Financial Planning', 'Ethical Venture Crowdfunding'],
+    financialChallenge: 'Scaling without interest-bearing debt.',
+    referralSource: 'Community Financial Meetup',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, true);
+  assert.deepEqual(result.errors, {});
+});
+

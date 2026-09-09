@@ -46,14 +46,6 @@ function validateWebinarRegistration(data = {}) {
     errors.businessType = 'Please select your business type.';
   }
 
-  if (!String(data.businessAge || '').trim()) {
-    errors.businessAge = 'Please select how long your business has been operating.';
-  }
-
-  if (!String(data.employeeCount || '').trim()) {
-    errors.employeeCount = 'Please select the number of employees.';
-  }
-
   if (!Array.isArray(data.financialInterests) || data.financialInterests.length < 1) {
     errors.financialInterests = 'Please select at least one financial topic.';
   }

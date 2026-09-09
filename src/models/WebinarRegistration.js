@@ -9,8 +9,8 @@ const webinarRegistrationSchema = new mongoose.Schema({
   businessWebsite: { type: String, required: true, trim: true },
   businessRole: { type: String, required: true, trim: true },
   businessType: { type: String, required: true, trim: true },
-  businessAge: { type: String, required: true, trim: true },
-  employeeCount: { type: String, required: true, trim: true },
+  businessAge: { type: String, default: '' },
+  employeeCount: { type: String, default: '' },
   annualTurnover: { type: String, default: '' },
   financialInterests: { type: [String], required: true, validate: {
     validator: values => Array.isArray(values) && values.length >= 1,
