@@ -5,7 +5,7 @@ const { validateWebinarRegistration } = require('./webinarValidation');
 test('accepts a valid webinar registration payload', () => {
   const payload = {
     fullName: 'Amina Rahman',
-    phone: '+917123456789',
+    phone: '7123456789',
     email: 'amina@example.com',
     city: 'Chennai',
     businessName: 'Rahman Ventures',
@@ -26,7 +26,7 @@ test('accepts a valid webinar registration payload', () => {
 test('rejects invalid business website and missing consent', () => {
   const payload = {
     fullName: 'Amina Rahman',
-    phone: '+917123456789',
+    phone: '7123456789',
     email: 'amina@example.com',
     city: 'Chennai',
     businessName: 'Rahman Ventures',
@@ -48,7 +48,7 @@ test('rejects invalid business website and missing consent', () => {
 test('accepts custom specified answers when other options are chosen', () => {
   const payload = {
     fullName: 'Zainab Fatima',
-    phone: '+919876543210',
+    phone: '9876543210',
     email: 'zainab@custombusiness.com',
     city: 'Bangalore',
     businessName: 'Fatima Sustainable Design',
@@ -64,5 +64,45 @@ test('accepts custom specified answers when other options are chosen', () => {
   const result = validateWebinarRegistration(payload);
   assert.equal(result.isValid, true);
   assert.deepEqual(result.errors, {});
+});
+
+test('requires a 10-digit phone number and an email containing @', () => {
+  const payload = {
+    fullName: 'Amina Rahman',
+    phone: '123456789',
+    email: 'amina.example.com',
+    businessName: 'Rahman Ventures',
+    businessWebsite: 'https://www.rahmanventures.com',
+    businessRole: 'Founder / Owner',
+    businessType: 'Technology / IT',
+    financialInterests: ['Financial Planning'],
+    referralSource: 'Website',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, false);
+  assert.match(result.errors.phone, /10-digit/i);
+  assert.match(result.errors.email, /valid email/i);
+});
+
+test('accepts the supplied India country-code phone format after normalization', () => {
+  const payload = {
+    fullName: 'Test User',
+    phone: '9876543210',
+    email: 'test@example.com',
+    businessName: 'Test Company',
+    businessWebsite: 'https://example.com',
+    businessRole: 'Founder / Owner',
+    businessType: 'Technology / IT',
+    financialInterests: ['Business Financial Planning', 'Investment Planning', 'Business Valuation'],
+    financialInterestsOther: '',
+    financialChallenge: 'Need better financial planning and investment management.',
+    referralSource: 'WhatsApp',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, true);
 });
 

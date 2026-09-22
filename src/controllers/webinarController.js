@@ -1,21 +1,31 @@
 const WebinarRegistration = require('../models/WebinarRegistration');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
 
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+}
+
 exports.createWebinarRegistration = async (req, res) => {
   try {
     const payload = {
       fullName: req.body.fullName,
-      phone: req.body.phone,
+      phone: normalizePhone(req.body.phone),
       email: String(req.body.email || '').trim().toLowerCase(),
-      city: req.body.city,
+      city: String(req.body.city || '').trim(),
+      state: String(req.body.state || '').trim(),
+      country: String(req.body.country || '').trim(),
       businessName: req.body.businessName,
       businessWebsite: String(req.body.businessWebsite || '').trim(),
       businessRole: req.body.businessRole,
       businessType: req.body.businessType,
+      designation: String(req.body.designation || req.body.businessRole || '').trim(),
+      industry: String(req.body.industry || req.body.businessType || '').trim(),
       businessAge: req.body.businessAge || '',
       employeeCount: req.body.employeeCount || '',
       annualTurnover: req.body.annualTurnover || '',
       financialInterests: req.body.financialInterests,
+      financialInterestsOther: String(req.body.financialInterestsOther || '').trim(),
       financialChallenge: String(req.body.financialChallenge || '').trim(),
       referralSource: req.body.referralSource,
       consent: req.body.consent,

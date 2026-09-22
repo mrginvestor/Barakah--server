@@ -17,17 +17,13 @@ function validateWebinarRegistration(data = {}) {
   }
 
   const phone = String(data.phone || '').trim();
-  if (!phone || !/^\+?[1-9]\d{7,14}$/.test(phone.replace(/\s+/g, ''))) {
-    errors.phone = 'Please enter a valid mobile number with country code.';
+  if (!/^\d{10}$/.test(phone)) {
+    errors.phone = 'Please enter a valid 10-digit mobile number.';
   }
 
   const email = String(data.email || '').trim();
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
     errors.email = 'Please enter a valid email address.';
-  }
-
-  if (!String(data.city || '').trim()) {
-    errors.city = 'Please enter your city or location.';
   }
 
   if (!String(data.businessName || '').trim()) {
