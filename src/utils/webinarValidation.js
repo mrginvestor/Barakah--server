@@ -1,13 +1,4 @@
-function isValidUrl(value) {
-  if (!value || typeof value !== 'string') return false;
-  const trimmed = value.trim();
-  try {
-    const url = new URL(trimmed);
-    return ['http:', 'https:'].includes(url.protocol) && Boolean(url.hostname);
-  } catch {
-    return false;
-  }
-}
+const financialInterestOptions = new Set(['Financial Planning', 'Loans and Financing', 'Investments and Wealth Management', 'Business Ethics', 'Others']);
 
 function validateWebinarRegistration(data = {}) {
   const errors = {};
@@ -16,9 +7,9 @@ function validateWebinarRegistration(data = {}) {
     errors.fullName = 'Please enter your full name.';
   }
 
-  const phone = String(data.phone || '').trim();
+  const phone = String(data.whatsapp || data.phone || '').trim();
   if (!/^\d{10}$/.test(phone)) {
-    errors.phone = 'Please enter a valid 10-digit mobile number.';
+    errors.whatsapp = 'Please enter a valid 10-digit mobile number.';
   }
 
   const email = String(data.email || '').trim();
@@ -26,28 +17,24 @@ function validateWebinarRegistration(data = {}) {
     errors.email = 'Please enter a valid email address.';
   }
 
-  if (!String(data.businessName || '').trim()) {
-    errors.businessName = 'Please enter your business or company name.';
+  if (!String(data.designation || '').trim()) {
+    errors.designation = 'Please select your designation or occupation.';
   }
 
-  if (!isValidUrl(String(data.businessWebsite || '').trim())) {
-    errors.businessWebsite = 'Please enter a valid business website URL.';
-  }
-
-  if (!String(data.businessRole || '').trim()) {
-    errors.businessRole = 'Please select your role in the business.';
-  }
-
-  if (!String(data.businessType || '').trim()) {
-    errors.businessType = 'Please select your business type.';
+  if (!String(data.industry || '').trim()) {
+    errors.industry = 'Please select your industry.';
   }
 
   if (!Array.isArray(data.financialInterests) || data.financialInterests.length < 1) {
     errors.financialInterests = 'Please select at least one financial topic.';
+  } else if (data.financialInterests.some(interest => !financialInterestOptions.has(interest))) {
+    errors.financialInterests = 'Please select valid financial topics.';
+  } else if (data.financialInterests.includes('Others') && !String(data.otherFinancialInterest || '').trim()) {
+    errors.otherFinancialInterest = 'Please specify your financial interest.';
   }
 
-  if (!String(data.referralSource || '').trim()) {
-    errors.referralSource = 'Please tell us how you heard about this webinar.';
+  if (!String(data.webinarSource || '').trim()) {
+    errors.webinarSource = 'Please tell us how you heard about this webinar.';
   }
 
   if (data.consent !== true) {
@@ -57,4 +44,4 @@ function validateWebinarRegistration(data = {}) {
   return { isValid: Object.keys(errors).length === 0, errors };
 }
 
-module.exports = { validateWebinarRegistration, isValidUrl };
+module.exports = { validateWebinarRegistration };

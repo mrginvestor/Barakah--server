@@ -1,33 +1,38 @@
 const WebinarRegistration = require('../models/WebinarRegistration');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
 
-function normalizePhone(value) {
-  const digits = String(value || '').replace(/\D/g, '');
-  return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+function normalizeLegacyRegistration(registration) {
+  const location = String(registration.location || [registration.city, registration.state, registration.country].filter(Boolean).join(', ')).trim();
+  return {
+    _id: registration._id,
+    fullName: registration.fullName,
+    email: registration.email,
+    whatsapp: String(registration.whatsapp || registration.phone || '').trim(),
+    location,
+    designation: String(registration.designation || registration.businessRole || '').trim(),
+    industry: String(registration.industry || registration.businessType || '').trim(),
+    financialInterests: Array.isArray(registration.financialInterests) ? registration.financialInterests : [],
+    otherFinancialInterest: String(registration.otherFinancialInterest || registration.financialInterestsOther || '').trim(),
+    financialChallenge: String(registration.financialChallenge || '').trim(),
+    webinarSource: String(registration.webinarSource || registration.referralSource || '').trim(),
+    consent: registration.consent === true,
+    createdAt: registration.createdAt,
+  };
 }
 
 exports.createWebinarRegistration = async (req, res) => {
   try {
     const payload = {
       fullName: req.body.fullName,
-      phone: normalizePhone(req.body.phone),
+      whatsapp: String(req.body.whatsapp || '').trim(),
       email: String(req.body.email || '').trim().toLowerCase(),
-      city: String(req.body.city || '').trim(),
-      state: String(req.body.state || '').trim(),
-      country: String(req.body.country || '').trim(),
-      businessName: req.body.businessName,
-      businessWebsite: String(req.body.businessWebsite || '').trim(),
-      businessRole: req.body.businessRole,
-      businessType: req.body.businessType,
-      designation: String(req.body.designation || req.body.businessRole || '').trim(),
-      industry: String(req.body.industry || req.body.businessType || '').trim(),
-      businessAge: req.body.businessAge || '',
-      employeeCount: req.body.employeeCount || '',
-      annualTurnover: req.body.annualTurnover || '',
+      location: String(req.body.location || '').trim(),
+      designation: String(req.body.designation || '').trim(),
+      industry: String(req.body.industry || '').trim(),
       financialInterests: req.body.financialInterests,
-      financialInterestsOther: String(req.body.financialInterestsOther || '').trim(),
+      otherFinancialInterest: String(req.body.otherFinancialInterest || '').trim(),
       financialChallenge: String(req.body.financialChallenge || '').trim(),
-      referralSource: req.body.referralSource,
+      webinarSource: String(req.body.webinarSource || '').trim(),
       consent: req.body.consent,
     };
 
@@ -53,8 +58,8 @@ exports.createWebinarRegistration = async (req, res) => {
 
 exports.getWebinarRegistrations = async (req, res) => {
   try {
-    const registrations = await WebinarRegistration.find().sort({ createdAt: -1 });
-    return res.json(registrations);
+    const registrations = await WebinarRegistration.find().sort({ createdAt: -1 }).lean();
+    return res.json(registrations.map(normalizeLegacyRegistration));
   } catch (error) {
     return res.status(500).json({ message: 'Server error' });
   }

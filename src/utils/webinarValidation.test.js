@@ -5,16 +5,14 @@ const { validateWebinarRegistration } = require('./webinarValidation');
 test('accepts a valid webinar registration payload', () => {
   const payload = {
     fullName: 'Amina Rahman',
-    phone: '7123456789',
+    whatsapp: '7123456789',
     email: 'amina@example.com',
-    city: 'Chennai',
-    businessName: 'Rahman Ventures',
-    businessWebsite: 'https://www.rahmanventures.com',
-    businessRole: 'Founder / Owner',
-    businessType: 'Technology / IT',
-    financialInterests: ['Business Financial Planning', 'Cash Flow Management'],
+    location: 'Chennai, Tamil Nadu, India',
+    designation: 'Founder / Owner',
+    industry: 'Technology / IT',
+    financialInterests: ['Financial Planning', 'Loans and Financing'],
     financialChallenge: 'Cash flow volatility during seasonal demand cycles.',
-    referralSource: 'LinkedIn',
+    webinarSource: 'LinkedIn',
     consent: true,
   };
 
@@ -23,41 +21,37 @@ test('accepts a valid webinar registration payload', () => {
   assert.deepEqual(result.errors, {});
 });
 
-test('rejects invalid business website and missing consent', () => {
+test('rejects invalid financial interests and missing consent', () => {
   const payload = {
     fullName: 'Amina Rahman',
-    phone: '7123456789',
+    whatsapp: '7123456789',
     email: 'amina@example.com',
-    city: 'Chennai',
-    businessName: 'Rahman Ventures',
-    businessWebsite: 'not-a-url',
-    businessRole: 'Founder / Owner',
-    businessType: 'Technology / IT',
-    financialInterests: [],
-    referralSource: 'LinkedIn',
+    location: 'Chennai, Tamil Nadu, India',
+    designation: 'Founder / Owner',
+    industry: 'Technology / IT',
+    financialInterests: ['Cash Flow Management'],
+    webinarSource: 'LinkedIn',
     consent: false,
   };
 
   const result = validateWebinarRegistration(payload);
   assert.equal(result.isValid, false);
-  assert.match(result.errors.businessWebsite, /valid/i);
-  assert.match(result.errors.financialInterests, /at least one/i);
+  assert.match(result.errors.financialInterests, /valid/i);
   assert.match(result.errors.consent, /agree/i);
 });
 
-test('accepts custom specified answers when other options are chosen', () => {
+test('accepts the complete set of financial interest options', () => {
   const payload = {
     fullName: 'Zainab Fatima',
-    phone: '9876543210',
+    whatsapp: '9876543210',
     email: 'zainab@custombusiness.com',
-    city: 'Bangalore',
-    businessName: 'Fatima Sustainable Design',
-    businessWebsite: 'https://fatimadesign.com',
-    businessRole: 'Chief Creative Officer',
-    businessType: 'Sustainable Architecture & Design',
-    financialInterests: ['Business Financial Planning', 'Ethical Venture Crowdfunding'],
+    location: 'Bangalore, Karnataka, India',
+    designation: 'Chief Creative Officer',
+    industry: 'Sustainable Architecture & Design',
+    financialInterests: ['Financial Planning', 'Loans and Financing', 'Investments and Wealth Management', 'Business Ethics', 'Others'],
+    otherFinancialInterest: 'Islamic fintech and ethical investing',
     financialChallenge: 'Scaling without interest-bearing debt.',
-    referralSource: 'Community Financial Meetup',
+    webinarSource: 'Community Financial Meetup',
     consent: true,
   };
 
@@ -66,43 +60,90 @@ test('accepts custom specified answers when other options are chosen', () => {
   assert.deepEqual(result.errors, {});
 });
 
-test('requires a 10-digit phone number and an email containing @', () => {
+test('requires a description when Others is selected', () => {
   const payload = {
     fullName: 'Amina Rahman',
-    phone: '123456789',
-    email: 'amina.example.com',
-    businessName: 'Rahman Ventures',
-    businessWebsite: 'https://www.rahmanventures.com',
-    businessRole: 'Founder / Owner',
-    businessType: 'Technology / IT',
-    financialInterests: ['Financial Planning'],
-    referralSource: 'Website',
+    whatsapp: '7123456789',
+    email: 'amina@example.com',
+    designation: 'Founder / Owner',
+    industry: 'Technology / IT',
+    financialInterests: ['Others'],
+    webinarSource: 'Website',
     consent: true,
   };
 
   const result = validateWebinarRegistration(payload);
   assert.equal(result.isValid, false);
-  assert.match(result.errors.phone, /10-digit/i);
+  assert.match(result.errors.otherFinancialInterest, /specify/i);
+});
+
+test('requires a 10-digit phone number and an email containing @', () => {
+  const payload = {
+    fullName: 'Amina Rahman',
+    whatsapp: '123456789',
+    email: 'amina.example.com',
+    location: 'Chennai, Tamil Nadu, India',
+    designation: 'Founder / Owner',
+    industry: 'Technology / IT',
+    financialInterests: ['Financial Planning'],
+    webinarSource: 'Website',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, false);
+  assert.match(result.errors.whatsapp, /10-digit/i);
   assert.match(result.errors.email, /valid email/i);
 });
 
-test('accepts the supplied India country-code phone format after normalization', () => {
+test('accepts a valid 10-digit Indian mobile number', () => {
   const payload = {
     fullName: 'Test User',
-    phone: '9876543210',
+    whatsapp: '9876543210',
     email: 'test@example.com',
-    businessName: 'Test Company',
-    businessWebsite: 'https://example.com',
-    businessRole: 'Founder / Owner',
-    businessType: 'Technology / IT',
-    financialInterests: ['Business Financial Planning', 'Investment Planning', 'Business Valuation'],
-    financialInterestsOther: '',
+    location: 'Chennai, Tamil Nadu, India',
+    designation: 'Founder / Owner',
+    industry: 'Technology / IT',
+    financialInterests: ['Financial Planning', 'Investments and Wealth Management'],
     financialChallenge: 'Need better financial planning and investment management.',
-    referralSource: 'WhatsApp',
+    webinarSource: 'WhatsApp',
     consent: true,
   };
 
   const result = validateWebinarRegistration(payload);
   assert.equal(result.isValid, true);
+});
+
+test('accepts the requested valid mobile numbers', () => {
+  for (const whatsapp of ['9876543210', '9123456789', '8098765432', '1234567890']) {
+    const result = validateWebinarRegistration({
+      fullName: 'Test User',
+      whatsapp,
+      email: `${whatsapp}@example.com`,
+      designation: 'Founder / Owner',
+      industry: 'Technology / IT',
+      financialInterests: ['Financial Planning'],
+      webinarSource: 'Website',
+      consent: true,
+    });
+    assert.equal(result.isValid, true, whatsapp);
+  }
+});
+
+test('rejects invalid mobile numbers', () => {
+  for (const whatsapp of ['987654321', '98765432101', 'abcdefghij', '98765abcde']) {
+    const result = validateWebinarRegistration({
+      fullName: 'Test User',
+      whatsapp,
+      email: 'test@example.com',
+      designation: 'Founder / Owner',
+      industry: 'Technology / IT',
+      financialInterests: ['Financial Planning'],
+      webinarSource: 'Website',
+      consent: true,
+    });
+    assert.equal(result.isValid, false, whatsapp);
+    assert.match(result.errors.whatsapp, /10-digit mobile/i, whatsapp);
+  }
 });
 
