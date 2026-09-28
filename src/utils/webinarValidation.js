@@ -1,4 +1,14 @@
+const { parsePhoneNumberFromString } = require('libphonenumber-js/max');
+
 const financialInterestOptions = new Set(['Financial Planning', 'Loans and Financing', 'Investments and Wealth Management', 'Business Ethics', 'Others']);
+
+function getCountryName(country) {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'region' }).of(country) || 'the selected country';
+  } catch {
+    return 'the selected country';
+  }
+}
 
 function validateWebinarRegistration(data = {}) {
   const errors = {};
@@ -8,8 +18,12 @@ function validateWebinarRegistration(data = {}) {
   }
 
   const phone = String(data.whatsapp || data.phone || '').trim();
-  if (!/^\d{10}$/.test(phone)) {
-    errors.whatsapp = 'Please enter a valid 10-digit mobile number.';
+  const parsedPhone = phone ? parsePhoneNumberFromString(phone) : undefined;
+  const phoneCountry = String(data.phoneCountry || '').trim().toUpperCase();
+  if (!phone) {
+    errors.whatsapp = 'Please enter your WhatsApp / mobile number.';
+  } else if (!parsedPhone || !parsedPhone.isValid() || (phoneCountry && parsedPhone.country !== phoneCountry)) {
+    errors.whatsapp = `Please enter a valid mobile number for ${phoneCountry ? getCountryName(phoneCountry) : 'the selected country'}.`;
   }
 
   const email = String(data.email || '').trim();

@@ -1,5 +1,6 @@
 const WebinarRegistration = require('../models/WebinarRegistration');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
+const { parsePhoneNumberFromString } = require('libphonenumber-js/max');
 
 function normalizeLegacyRegistration(registration) {
   const location = String(registration.location || [registration.city, registration.state, registration.country].filter(Boolean).join(', ')).trim();
@@ -22,9 +23,13 @@ function normalizeLegacyRegistration(registration) {
 
 exports.createWebinarRegistration = async (req, res) => {
   try {
+    const submittedPhone = String(req.body.whatsapp || req.body.phone || '').trim();
+    const parsedPhone = parsePhoneNumberFromString(submittedPhone);
+    const normalizedPhone = parsedPhone?.isValid() ? parsedPhone.number : submittedPhone;
     const payload = {
       fullName: req.body.fullName,
-      whatsapp: String(req.body.whatsapp || '').trim(),
+      whatsapp: normalizedPhone,
+      phoneCountry: req.body.phoneCountry,
       email: String(req.body.email || '').trim().toLowerCase(),
       location: String(req.body.location || '').trim(),
       designation: String(req.body.designation || '').trim(),

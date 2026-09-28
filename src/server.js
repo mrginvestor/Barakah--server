@@ -7,20 +7,35 @@ const helmet = require('helmet');
 const app = express();
 
 app.use(helmet());
-const allowedOrigins = [
-  'https://www.halalwealth.finance',
-  'https://halalwealth.finance',
-  'https://barakah-client-eta.vercel.app',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  ...(process.env.CLIENT_URL || '')
+const parseOrigins = value => String(value || '')
   .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean),
-];
+  .map(origin => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+const isProduction = process.env.NODE_ENV === 'production';
+const isLocalOrigin = origin => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+const configuredFrontendOrigins = parseOrigins(process.env.FRONTEND_URLS);
+const productionOrigins = configuredFrontendOrigins.filter(origin => !isLocalOrigin(origin));
+const legacyClientOrigins = parseOrigins(process.env.CLIENT_URL)
+  .filter(origin => !isProduction || !isLocalOrigin(origin));
+const defaultOrigins = isProduction
+  ? (productionOrigins.length ? productionOrigins : [
+    'https://www.halalwealth.finance',
+    'https://halalwealth.finance',
+    'https://barakah-client-eta.vercel.app',
+  ])
+  : [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+  ];
+const allowedOrigins = new Set([
+  ...defaultOrigins,
+  ...(!isProduction ? configuredFrontendOrigins : []),
+  ...legacyClientOrigins,
+]);
 const corsOptions = {
   origin: (requestOrigin, callback) => {
-    if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+    if (!requestOrigin || allowedOrigins.has(requestOrigin)) {
       callback(null, true);
       return;
     }
@@ -34,7 +49,6 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 
 // Basic Route for testing
