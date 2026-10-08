@@ -3,8 +3,44 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
+const nodemailer = require('nodemailer');
 
 const app = express();
+
+async function verifySmtpConfiguration() {
+  const host = process.env.SMTP_HOST || process.env.MAIL_HOST;
+  const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || 587);
+  const username = process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.MAIL_USERNAME || process.env.MAIL_USER;
+  const password = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.MAIL_PASS || process.env.MAIL_PASSWORD;
+  const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || 'false').toLowerCase() === 'true';
+
+  if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+    console.warn('SMTP configuration is incomplete. Email delivery will remain disabled until real SMTP credentials are set.');
+    return;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: useSecureSocket || port === 465,
+    requireTLS: !useSecureSocket && port !== 465,
+    auth: { user: username, pass: password },
+  });
+
+  try {
+    await transporter.verify();
+    console.log('SMTP verification successful');
+  } catch (error) {
+    console.error('SMTP verification failed:', {
+      code: error.code || 'SMTP_VERIFY_FAILED',
+      host,
+      port,
+      secure: useSecureSocket || port === 465,
+      username,
+      message: error.message || 'Authentication failed',
+    });
+  }
+}
 
 app.use(helmet());
 const parseOrigins = value => String(value || '')
@@ -56,6 +92,7 @@ app.get('/api/status', (req, res) => res.json({ status: 'API is running' }));
 
 // Registration Routes
 const apiRoutes = require('./routes/api');
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api', apiRoutes);
 
 const PORT = process.env.PORT || 5000;
@@ -65,8 +102,9 @@ if (!process.env.MONGODB_URI) {
   process.exitCode = 1;
 } else {
   mongoose.connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB Connected successfully');
+    await verifySmtpConfiguration();
     app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
   })
   .catch(err => console.error('MongoDB connection error:', err));

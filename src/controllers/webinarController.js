@@ -1,6 +1,7 @@
 const WebinarRegistration = require('../models/WebinarRegistration');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
 const { parsePhoneNumberFromString } = require('libphonenumber-js/max');
+const webinarEmailService = require('../services/webinarEmailService');
 
 function normalizeLegacyRegistration(registration) {
   const location = String(registration.location || [registration.city, registration.state, registration.country].filter(Boolean).join(', ')).trim();
@@ -21,45 +22,82 @@ function normalizeLegacyRegistration(registration) {
   };
 }
 
-exports.createWebinarRegistration = async (req, res) => {
-  try {
-    const submittedPhone = String(req.body.whatsapp || req.body.phone || '').trim();
-    const parsedPhone = parsePhoneNumberFromString(submittedPhone);
-    const normalizedPhone = parsedPhone?.isValid() ? parsedPhone.number : submittedPhone;
-    const payload = {
-      fullName: req.body.fullName,
-      whatsapp: normalizedPhone,
-      phoneCountry: req.body.phoneCountry,
-      email: String(req.body.email || '').trim().toLowerCase(),
-      location: String(req.body.location || '').trim(),
-      designation: String(req.body.designation || '').trim(),
-      industry: String(req.body.industry || '').trim(),
-      financialInterests: req.body.financialInterests,
-      otherFinancialInterest: String(req.body.otherFinancialInterest || '').trim(),
-      financialChallenge: String(req.body.financialChallenge || '').trim(),
-      webinarSource: String(req.body.webinarSource || '').trim(),
-      consent: req.body.consent,
-    };
+function createWebinarRegistrationHandler({
+  registrationModel = WebinarRegistration,
+  emailService = webinarEmailService,
+  logger = console,
+} = {}) {
+  return async (req, res) => {
+    try {
+      const submittedPhone = String(req.body.whatsapp || req.body.phone || '').trim();
+      const parsedPhone = parsePhoneNumberFromString(submittedPhone);
+      const normalizedPhone = parsedPhone?.isValid() ? parsedPhone.number : submittedPhone;
+      const payload = {
+        fullName: req.body.fullName,
+        whatsapp: normalizedPhone,
+        phoneCountry: req.body.phoneCountry,
+        email: String(req.body.email || '').trim().toLowerCase(),
+        location: String(req.body.location || '').trim(),
+        designation: String(req.body.designation || '').trim(),
+        industry: String(req.body.industry || '').trim(),
+        financialInterests: req.body.financialInterests,
+        otherFinancialInterest: String(req.body.otherFinancialInterest || '').trim(),
+        financialChallenge: String(req.body.financialChallenge || '').trim(),
+        webinarSource: String(req.body.webinarSource || '').trim(),
+        consent: req.body.consent,
+      };
 
-    const validation = validateWebinarRegistration(payload);
-    if (!validation.isValid) {
-      return res.status(400).json({ message: Object.values(validation.errors)[0] || 'Please check the information you entered.' });
-    }
+      const validation = validateWebinarRegistration(payload);
+      if (!validation.isValid) {
+        return res.status(400).json({ message: Object.values(validation.errors)[0] || 'Please check the information you entered.' });
+      }
 
-    const existing = await WebinarRegistration.findOne({ email: payload.email });
-    if (existing) {
-      return res.status(400).json({ message: 'This email address is already registered for the webinar.' });
-    }
+      const existing = await registrationModel.findOne({ email: payload.email });
+      if (existing) {
+        return res.status(400).json({ message: 'This email address is already registered for the webinar.' });
+      }
 
-    const registration = await WebinarRegistration.create(payload);
-    return res.status(201).json({ success: true, message: 'Registration successful', data: registration });
-  } catch (error) {
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ message: 'Please check the information you entered.' });
+      const registration = await registrationModel.create(payload);
+      let confirmationEmailSent = false;
+      try {
+        await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
+        confirmationEmailSent = true;
+        logger.info('Webinar registration confirmation email sent.', { email: registration.email });
+        await registrationModel.findByIdAndUpdate(
+          registration._id,
+          { $set: { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null } },
+          { new: true, runValidators: true },
+        );
+      } catch (error) {
+        logger.error('Webinar registration confirmation email failed.', {
+          code: error.code || 'EMAIL_SEND_FAILED',
+          message: error.message || 'Unknown email failure',
+          email: registration.email,
+        });
+        await registrationModel.findByIdAndUpdate(
+          registration._id,
+          { $set: { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500) } },
+          { new: true, runValidators: true },
+        ).catch(() => {});
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Registration successful',
+        confirmationEmailSent,
+        data: registration,
+      });
+    } catch (error) {
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({ message: 'Please check the information you entered.' });
+      }
+      return res.status(500).json({ message: 'We could not complete your registration right now. Please try again.' });
     }
-    return res.status(500).json({ message: 'We could not complete your registration right now. Please try again.' });
   }
-};
+}
+
+exports.createWebinarRegistration = createWebinarRegistrationHandler();
+exports.createWebinarRegistrationHandler = createWebinarRegistrationHandler;
 
 exports.getWebinarRegistrations = async (req, res) => {
   try {

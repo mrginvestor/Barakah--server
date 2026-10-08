@@ -15,7 +15,10 @@ const webinarRegistrationSchema = new mongoose.Schema({
   financialChallenge: { type: String, default: '' },
   webinarSource: { type: String, required: true, trim: true },
   consent: { type: Boolean, required: true },
-  status: { type: String, default: 'New' },
+  status: { type: String, enum: ['New', 'Registered', 'Confirmed', 'Attended', 'Cancelled'], default: 'Registered' },
+  confirmationEmailSent: { type: Boolean, default: false },
+  confirmationEmailSentAt: { type: Date, default: null },
+  confirmationEmailLastError: { type: String, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('WebinarRegistration', webinarRegistrationSchema);
