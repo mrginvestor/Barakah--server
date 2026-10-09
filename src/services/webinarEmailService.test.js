@@ -29,9 +29,9 @@ YouTube: https://youtube.com/@ethicalfinancebasithtamil
 Instagram: https://instagram.com/ethicalfinancebasith.tamil
 WhatsApp Community: https://chat.whatsapp.com/InfThev3br60wmCUWRt3tq
 
-Warm regards,
+JazakAllah,
 
-Halal Wealth Summit Team`);
+Halal Wealth Webinar Team`);
   assert.doesNotMatch(email.text, /\[Name\]|\{\{name\}\}/);
 });
 
@@ -81,7 +81,7 @@ test('sends multipart confirmation from the fixed sender using backend SMTP sett
     requireTLS: false,
     auth: { user: 'info@halalwealth.finance', pass: 'test-only-password' },
   });
-  assert.deepEqual(message.from, { name: 'Halal Wealth Summit', address: 'info@halalwealth.finance' });
+  assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
   assert.equal(message.replyTo, 'info@halalwealth.finance');
   assert.equal(message.to, 'test@example.com');
   assert.equal(message.subject, EMAIL_SUBJECT);

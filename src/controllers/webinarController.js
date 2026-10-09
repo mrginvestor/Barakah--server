@@ -27,6 +27,13 @@ function createWebinarRegistrationHandler({
   emailService = webinarEmailService,
   logger = console,
 } = {}) {
+  const safeLogger = {
+    ...console,
+    ...logger,
+  };
+  if (typeof safeLogger.info !== 'function') safeLogger.info = () => {};
+  if (typeof safeLogger.error !== 'function') safeLogger.error = () => {};
+
   return async (req, res) => {
     try {
       const submittedPhone = String(req.body.whatsapp || req.body.phone || '').trim();
@@ -62,23 +69,27 @@ function createWebinarRegistrationHandler({
       try {
         await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
         confirmationEmailSent = true;
-        logger.info('Webinar registration confirmation email sent.', { email: registration.email });
-        await registrationModel.findByIdAndUpdate(
-          registration._id,
-          { $set: { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null } },
-          { new: true, runValidators: true },
-        );
+        safeLogger.info('Webinar registration confirmation email sent.', { email: registration.email });
+        if (typeof registrationModel.findByIdAndUpdate === 'function') {
+          await registrationModel.findByIdAndUpdate(
+            registration._id,
+            { $set: { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null } },
+            { new: true, runValidators: true },
+          );
+        }
       } catch (error) {
-        logger.error('Webinar registration confirmation email failed.', {
+        safeLogger.error('Webinar registration confirmation email failed.', {
           code: error.code || 'EMAIL_SEND_FAILED',
           message: error.message || 'Unknown email failure',
           email: registration.email,
         });
-        await registrationModel.findByIdAndUpdate(
-          registration._id,
-          { $set: { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500) } },
-          { new: true, runValidators: true },
-        ).catch(() => {});
+        if (typeof registrationModel.findByIdAndUpdate === 'function') {
+          await registrationModel.findByIdAndUpdate(
+            registration._id,
+            { $set: { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500) } },
+            { new: true, runValidators: true },
+          ).catch(() => {});
+        }
       }
 
       return res.status(201).json({

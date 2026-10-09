@@ -78,6 +78,13 @@ function csvCell(value) {
 }
 
 function createAdminRegistrationController({ registrationModel = WebinarRegistration, logger = console, emailService = webinarEmailService } = {}) {
+  const safeLogger = {
+    ...console,
+    ...logger,
+  };
+  if (typeof safeLogger.info !== 'function') safeLogger.info = () => {};
+  if (typeof safeLogger.error !== 'function') safeLogger.error = () => {};
+
   async function list(req, res) {
     try {
       const filter = buildRegistrationFilter(req.query);
@@ -123,7 +130,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       if (error.message.startsWith('Invalid ') || error.message.startsWith('The start date')) {
         return res.status(400).json({ message: error.message });
       }
-      logger.error('Admin registration listing failed.', { code: error.code || 'ADMIN_LIST_FAILED' });
+      safeLogger.error('Admin registration listing failed.', { code: error.code || 'ADMIN_LIST_FAILED' });
       return res.status(500).json({ message: 'Registrations could not be loaded right now.' });
     }
   }
@@ -135,7 +142,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       return res.json({ data: normalizeEmailTracking(normalizeStatus(registration)) });
     } catch (error) {
-      logger.error('Admin registration detail lookup failed.', { code: error.code || 'ADMIN_DETAIL_FAILED' });
+      safeLogger.error('Admin registration detail lookup failed.', { code: error.code || 'ADMIN_DETAIL_FAILED' });
       return res.status(500).json({ message: 'Registration details could not be loaded right now.' });
     }
   }
@@ -174,7 +181,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
         email: registration.email,
         fullName: registration.fullName,
       });
-      logger.info('Admin confirmation email sent.', { registrationId: registration._id, email: registration.email });
+      safeLogger.info('Admin confirmation email sent.', { registrationId: registration._id, email: registration.email });
       return res.json({ success: true, message: 'Confirmation email sent successfully.', data: updatedRegistration });
     } catch (error) {
       const registration = maybeLean(await registrationModel.findById(req.params.id));
@@ -184,7 +191,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
         email: registration.email,
         fullName: registration.fullName,
       }) : null;
-      logger.error('Admin confirmation email send failed.', {
+      safeLogger.error('Admin confirmation email send failed.', {
         code: error.code || 'ADMIN_EMAIL_SEND_FAILED',
         registrationId: req.params.id,
         email: registration?.email,
@@ -218,7 +225,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
         await markConfirmationResult(registration._id, { success: false, errorMessage: error.message || 'Email delivery failed.', email: registration.email, fullName: registration.fullName });
         summary.failed += 1;
         failedEmails.push(registration.email);
-        logger.error('Bulk confirmation email failed.', {
+        safeLogger.error('Bulk confirmation email failed.', {
           code: error.code || 'ADMIN_EMAIL_BATCH_FAILED',
           email: registration.email,
           registrationId: registration._id,
@@ -255,7 +262,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       return res.json({ success: true, data: normalizeStatus(registration) });
     } catch (error) {
-      logger.error('Admin registration status update failed.', { code: error.code || 'ADMIN_STATUS_FAILED' });
+      safeLogger.error('Admin registration status update failed.', { code: error.code || 'ADMIN_STATUS_FAILED' });
       return res.status(500).json({ message: 'Registration status could not be updated right now.' });
     }
   }
@@ -278,7 +285,7 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       }
       return res.end();
     } catch (error) {
-      logger.error('Admin registration export failed.', { code: error.code || 'ADMIN_EXPORT_FAILED' });
+      safeLogger.error('Admin registration export failed.', { code: error.code || 'ADMIN_EXPORT_FAILED' });
       if (res.headersSent) return res.destroy(error);
       return res.status(error.message.startsWith('Invalid ') || error.message.startsWith('The start date') ? 400 : 500)
         .json({ message: 'Registration data could not be exported.' });
