@@ -19,6 +19,9 @@ const webinarRegistrationSchema = new mongoose.Schema({
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
   confirmationEmailLastError: { type: String, default: null },
+  announcementEmailSent: { type: Boolean, default: false },
+  announcementEmailSentAt: { type: Date, default: null },
+  announcementEmailLastError: { type: String, default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('WebinarRegistration', webinarRegistrationSchema);

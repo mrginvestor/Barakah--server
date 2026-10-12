@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   EMAIL_SUBJECT,
+  POSTPONEMENT_EMAIL_SUBJECT,
   buildRegistrationConfirmation,
+  buildPostponementAnnouncement,
   createWebinarEmailService,
 } = require('./webinarEmailService');
 
@@ -33,6 +35,18 @@ JazakAllah,
 
 Halal Wealth Webinar Team`);
   assert.doesNotMatch(email.text, /\[Name\]|\{\{name\}\}/);
+});
+
+test('builds the postponement email content with the revised webinar date and links', () => {
+  const email = buildPostponementAnnouncement('Test User');
+
+  assert.equal(email.subject, POSTPONEMENT_EMAIL_SUBJECT);
+  assert.match(email.text, /Assalamu Alaikum warahmatullahi wabarakatuh/);
+  assert.match(email.text, /Sunday, 18 October 2026/);
+  assert.match(email.text, /NO NEED TO REGISTER AGAIN!/);
+  assert.match(email.html, /https:\/\/youtube.com\/@ethicalfinancebasithtamil/);
+  assert.match(email.html, /https:\/\/instagram.com\/ethicalfinancebasith.tamil/);
+  assert.match(email.html, /https:\/\/chat.whatsapp.com\/InfThev3br60wmCUWRt3tq/);
 });
 
 test('sends multipart confirmation from the fixed sender using backend SMTP settings', async () => {

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createAdminAuthController } = require('./adminAuthController');
+const { createAdminAuthController, getMissingAuthConfiguration } = require('./adminAuthController');
 
 const environment = {
   ADMIN_EMAIL: 'Admin@halalwealth.finance',
@@ -91,4 +91,68 @@ test('issues a short-lived ROLE_ADMIN bearer token for valid credentials', async
   assert.deepEqual(tokenPayload, { email: 'admin@halalwealth.finance', role: 'ROLE_ADMIN' });
   assert.equal(tokenSecret, environment.JWT_SECRET);
   assert.equal(tokenOptions.expiresIn, 1800);
+});
+
+test('identifies specific missing configuration variables safely', () => {
+  const missingAll = getMissingAuthConfiguration({});
+  assert.ok(missingAll.includes('ADMIN_EMAIL'));
+  assert.ok(missingAll.includes('ADMIN_PASSWORD or ADMIN_PASSWORD_HASH'));
+  assert.ok(missingAll.includes('JWT_SECRET'));
+
+  const shortSecret = getMissingAuthConfiguration({
+    ADMIN_EMAIL: 'admin@halalwealth.finance',
+    ADMIN_PASSWORD: 'password123',
+    JWT_SECRET: 'short_secret',
+  });
+  assert.equal(shortSecret.length, 1);
+  assert.match(shortSecret[0], /JWT_SECRET/);
+  assert.match(shortSecret[0], /must be at least 32 characters/);
+
+  const complete = getMissingAuthConfiguration({
+    ADMIN_EMAIL: 'admin@halalwealth.finance',
+    ADMIN_PASSWORD: 'password123',
+    JWT_SECRET: 's'.repeat(32),
+  });
+  assert.equal(complete.length, 0);
+});
+
+test('logs safe diagnostic message when admin auth configuration is missing', async () => {
+  const loggedErrors = [];
+  const fakeLogger = {
+    error: message => { loggedErrors.push(message); },
+  };
+  const controller = createAdminAuthController({
+    getEnvironment: () => ({}),
+    logger: fakeLogger,
+  });
+  const response = createResponse();
+
+  await controller.login({ body: { email: 'admin@halalwealth.finance', password: 'password123' } }, response);
+
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.message, 'Admin authentication is not configured.');
+  assert.equal(loggedErrors.length, 1);
+  assert.match(loggedErrors[0], /Admin authentication configuration is incomplete/);
+  assert.match(loggedErrors[0], /ADMIN_EMAIL/);
+  assert.match(loggedErrors[0], /ADMIN_PASSWORD or ADMIN_PASSWORD_HASH/);
+  assert.match(loggedErrors[0], /JWT_SECRET/);
+  assert.doesNotMatch(loggedErrors[0], /password123/);
+});
+
+test('accepts synonym environment variables such as ADMIN_PASS and ADMIN_JWT_SECRET', async () => {
+  const controller = createAdminAuthController({
+    getEnvironment: () => ({
+      ADMIN_USER_EMAIL: 'admin@halalwealth.finance',
+      ADMIN_PASS: 'secret-pass-synonym',
+      ADMIN_JWT_SECRET: 'x'.repeat(32),
+    }),
+    comparePassword: async (password, configured) => password === configured,
+    signToken: () => 'synonym-token',
+  });
+  const response = createResponse();
+
+  await controller.login({ body: { email: 'admin@halalwealth.finance', password: 'secret-pass-synonym' } }, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.token, 'synonym-token');
 });

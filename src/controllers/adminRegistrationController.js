@@ -56,18 +56,29 @@ function normalizeEmailStatus(registration = {}) {
   return 'Not Sent';
 }
 
+function normalizeAnnouncementStatus(registration = {}) {
+  if (registration.announcementEmailSent === true) return 'Sent';
+  if (registration.announcementEmailLastError) return 'Failed';
+  return 'Not Sent';
+}
+
 function normalizeEmailTracking(registration = {}) {
   const normalized = { ...registration };
   normalized.confirmationEmailSent = normalized.confirmationEmailSent === true;
   normalized.confirmationEmailSentAt = normalized.confirmationEmailSentAt || null;
   normalized.confirmationEmailLastError = normalized.confirmationEmailLastError || null;
+  normalized.announcementEmailSent = normalized.announcementEmailSent === true;
+  normalized.announcementEmailSentAt = normalized.announcementEmailSentAt || null;
+  normalized.announcementEmailLastError = normalized.announcementEmailLastError || null;
   normalized.emailStatus = normalizeEmailStatus(normalized);
+  normalized.announcementEmailStatus = normalizeAnnouncementStatus(normalized);
   return normalized;
 }
 
 function maybeLean(value) {
   if (!value) return value;
   if (typeof value.lean === 'function') return value.lean();
+  if (typeof value.toObject === 'function') return value.toObject();
   return value;
 }
 
@@ -84,6 +95,14 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
   };
   if (typeof safeLogger.info !== 'function') safeLogger.info = () => {};
   if (typeof safeLogger.error !== 'function') safeLogger.error = () => {};
+
+  function isValidId(id) {
+    if (!id || typeof id !== 'string' || id === '[object Object]') return false;
+    if (registrationModel === WebinarRegistration || registrationModel?.schema) {
+      return mongoose.isValidObjectId(id);
+    }
+    return mongoose.isValidObjectId(id) || /^[a-zA-Z0-9_-]+$/.test(id);
+  }
 
   async function list(req, res) {
     try {
@@ -136,9 +155,10 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
   }
 
   async function getById(req, res) {
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Registration not found.' });
+    if (!isValidId(req.params.id)) return res.status(404).json({ message: 'Registration not found.' });
     try {
-      const registration = maybeLean(await registrationModel.findById(req.params.id));
+      const query = registrationModel.findById(req.params.id);
+      const registration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       return res.json({ data: normalizeEmailTracking(normalizeStatus(registration)) });
     } catch (error) {
@@ -152,26 +172,60 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       ? { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null }
       : { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(errorMessage || 'Email delivery failed.').slice(0, 500) };
 
-    const updatedRegistration = maybeLean(await registrationModel.findByIdAndUpdate(
+    const query = registrationModel.findByIdAndUpdate(
       registrationId,
       { $set: update },
       { new: true, runValidators: true },
-    ));
+    );
+    const updatedRegistration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
 
     if (!updatedRegistration) return null;
+    const plainRecord = typeof updatedRegistration.toObject === 'function'
+      ? updatedRegistration.toObject()
+      : updatedRegistration;
     const mergedRegistration = {
-      ...(updatedRegistration || {}),
-      _id: registrationId,
-      email: email || updatedRegistration.email,
-      fullName: fullName || updatedRegistration.fullName,
+      ...(plainRecord || {}),
+      _id: String(registrationId),
+      email: email || plainRecord.email,
+      fullName: fullName || plainRecord.fullName,
+      ...update,
+    };
+    return normalizeEmailTracking(normalizeStatus(mergedRegistration));
+  }
+
+  async function markAnnouncementResult(registrationId, { success, errorMessage, email, fullName }) {
+    const update = success
+      ? { announcementEmailSent: true, announcementEmailSentAt: new Date(), announcementEmailLastError: null }
+      : { announcementEmailSent: false, announcementEmailSentAt: null, announcementEmailLastError: String(errorMessage || 'Announcement email delivery failed.').slice(0, 500) };
+
+    const query = registrationModel.findByIdAndUpdate(
+      registrationId,
+      { $set: update },
+      { new: true, runValidators: true },
+    );
+    const updatedRegistration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
+
+    if (!updatedRegistration) return null;
+    const plainRecord = typeof updatedRegistration.toObject === 'function'
+      ? updatedRegistration.toObject()
+      : updatedRegistration;
+    const mergedRegistration = {
+      ...(plainRecord || {}),
+      _id: String(registrationId),
+      email: email || plainRecord.email,
+      fullName: fullName || plainRecord.fullName,
       ...update,
     };
     return normalizeEmailTracking(normalizeStatus(mergedRegistration));
   }
 
   async function sendConfirmation(req, res) {
+    if (!isValidId(req.params.id)) {
+      return res.status(404).json({ message: 'Registration not found.' });
+    }
     try {
-      const registration = maybeLean(await registrationModel.findById(req.params.id));
+      const query = registrationModel.findById(req.params.id);
+      const registration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       if (!registration.email) return res.status(400).json({ message: 'This registration does not have a valid email address.' });
 
@@ -184,17 +238,32 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       safeLogger.info('Admin confirmation email sent.', { registrationId: registration._id, email: registration.email });
       return res.json({ success: true, message: 'Confirmation email sent successfully.', data: updatedRegistration });
     } catch (error) {
-      const registration = maybeLean(await registrationModel.findById(req.params.id));
-      const updatedRegistration = registration ? await markConfirmationResult(registration._id, {
-        success: false,
-        errorMessage: error.message || 'Email could not be sent right now.',
-        email: registration.email,
-        fullName: registration.fullName,
-      }) : null;
+      let updatedRegistration = null;
+      let email = null;
+      if (isValidId(req.params.id)) {
+        try {
+          const query = registrationModel.findById(req.params.id);
+          const reg = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
+          if (reg) {
+            email = reg.email;
+            updatedRegistration = await markConfirmationResult(reg._id, {
+              success: false,
+              errorMessage: error.message || 'Email could not be sent right now.',
+              email: reg.email,
+              fullName: reg.fullName,
+            });
+          }
+        } catch (dbError) {
+          safeLogger.error('Admin confirmation error tracking failed.', {
+            code: dbError.code || 'ADMIN_CONFIRMATION_TRACK_FAILED',
+            registrationId: req.params.id,
+          });
+        }
+      }
       safeLogger.error('Admin confirmation email send failed.', {
         code: error.code || 'ADMIN_EMAIL_SEND_FAILED',
         registrationId: req.params.id,
-        email: registration?.email,
+        email,
       });
       return res.status(200).json({
         success: false,
@@ -247,18 +316,138 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     return sendBulkConfirmations(req, res);
   }
 
+  async function sendPostponementAnnouncement(req, res) {
+    if (!isValidId(req.params.id)) {
+      return res.status(404).json({ message: 'Registration not found.' });
+    }
+    try {
+      const query = registrationModel.findById(req.params.id);
+      const registration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
+      if (!registration) return res.status(404).json({ message: 'Registration not found.' });
+      if (!registration.email) return res.status(400).json({ message: 'This registration does not have a valid email address.' });
+
+      await emailService.sendPostponementAnnouncement(registration.email, registration.fullName);
+      const updatedRegistration = await markAnnouncementResult(registration._id, {
+        success: true,
+        email: registration.email,
+        fullName: registration.fullName,
+      });
+      safeLogger.info('Admin postponement announcement email sent.', { registrationId: registration._id, email: registration.email });
+      return res.json({ success: true, message: 'Postponement announcement sent successfully.', data: updatedRegistration });
+    } catch (error) {
+      let updatedRegistration = null;
+      let email = null;
+      if (isValidId(req.params.id)) {
+        try {
+          const query = registrationModel.findById(req.params.id);
+          const reg = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
+          if (reg) {
+            email = reg.email;
+            updatedRegistration = await markAnnouncementResult(reg._id, {
+              success: false,
+              errorMessage: error.message || 'Announcement email could not be sent right now.',
+              email: reg.email,
+              fullName: reg.fullName,
+            });
+          }
+        } catch (dbError) {
+          safeLogger.error('Admin postponement error tracking failed.', {
+            code: dbError.code || 'ADMIN_ANNOUNCEMENT_TRACK_FAILED',
+            registrationId: req.params.id,
+          });
+        }
+      }
+      safeLogger.error('Admin postponement announcement send failed.', {
+        code: error.code || 'ADMIN_ANNOUNCEMENT_SEND_FAILED',
+        registrationId: req.params.id,
+        email,
+      });
+      return res.status(200).json({
+        success: false,
+        message: 'Postponement announcement could not be sent right now.',
+        data: updatedRegistration,
+      });
+    }
+  }
+
+  async function sendBulkPostponementAnnouncements(req, res) {
+    const confirmed = req.body && (req.body.confirmed === true || req.body.confirm === true);
+    if (!confirmed) {
+      return res.status(400).json({ message: 'Confirmation is required before sending the postponement announcement to all registered participants.' });
+    }
+
+    const retryFailed = req.body && req.body.retryFailed === true;
+    const includeSent = req.body && req.body.includeSent === true;
+    const delayMs = Number.isFinite(Number(req.body?.delayMs)) ? Number(req.body.delayMs) : 250;
+
+    const queryResult = await registrationModel.find();
+    const registrations = Array.isArray(queryResult)
+      ? queryResult
+      : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+
+    const pendingRegistrations = (registrations || []).filter(registration => {
+      if (!registration?.email) return false;
+      if (includeSent || retryFailed) return true;
+      return registration.announcementEmailSent !== true;
+    });
+
+    const filteredRegistrations = retryFailed
+      ? pendingRegistrations.filter(registration => registration.announcementEmailSent !== true || Boolean(registration.announcementEmailLastError))
+      : pendingRegistrations.filter(registration => includeSent || registration.announcementEmailSent !== true);
+
+    const summary = { total: registrations.length, sent: 0, failed: 0, skipped: Math.max(0, registrations.length - filteredRegistrations.length) };
+    const failedEmails = [];
+    const sentEmails = [];
+
+    for (const [index, registration] of filteredRegistrations.entries()) {
+      try {
+        await emailService.sendPostponementAnnouncement(registration.email, registration.fullName);
+        await markAnnouncementResult(registration._id, { success: true, email: registration.email, fullName: registration.fullName });
+        summary.sent += 1;
+        sentEmails.push(registration.email);
+      } catch (error) {
+        await markAnnouncementResult(registration._id, { success: false, errorMessage: error.message || 'Announcement delivery failed.', email: registration.email, fullName: registration.fullName });
+        summary.failed += 1;
+        failedEmails.push(registration.email);
+        safeLogger.error('Bulk postponement announcement failed.', {
+          code: error.code || 'ADMIN_ANNOUNCEMENT_BATCH_FAILED',
+          email: registration.email,
+          registrationId: registration._id,
+        });
+      }
+
+      if (index < filteredRegistrations.length - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Postponement announcement sending completed.',
+      summary,
+      failedEmails,
+      sentEmails,
+    });
+  }
+
+  async function resendBulkPostponementAnnouncements(req, res) {
+    req.body = { ...(req.body || {}), includeSent: true, retryFailed: true, confirmed: true };
+    return sendBulkPostponementAnnouncements(req, res);
+  }
+
   async function updateStatus(req, res) {
     const { status } = req.body || {};
     if (!REGISTRATION_STATUSES.includes(status)) {
       return res.status(400).json({ message: 'Choose a valid registration status.' });
     }
-    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Registration not found.' });
+    if (!isValidId(req.params.id)) return res.status(404).json({ message: 'Registration not found.' });
     try {
-      const registration = maybeLean(await registrationModel.findByIdAndUpdate(
+      const query = registrationModel.findByIdAndUpdate(
         req.params.id,
         { $set: { status } },
         { new: true, runValidators: true },
-      ));
+      );
+      const registration = maybeLean(await (query && typeof query.lean === 'function' ? query.lean() : query));
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       return res.json({ success: true, data: normalizeStatus(registration) });
     } catch (error) {
@@ -294,7 +483,18 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     }
   }
 
-  return { list, getById, sendConfirmation, sendBulkConfirmations, resendBulkConfirmations, updateStatus, exportCsv };
+  return {
+    list,
+    getById,
+    sendConfirmation,
+    sendBulkConfirmations,
+    resendBulkConfirmations,
+    sendPostponementAnnouncement,
+    sendBulkPostponementAnnouncements,
+    resendBulkPostponementAnnouncements,
+    updateStatus,
+    exportCsv,
+  };
 }
 
 module.exports = {

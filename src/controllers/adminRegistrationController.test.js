@@ -171,3 +171,110 @@ test('sends only pending registrations in bulk and continues after failures', as
   assert.equal(updated.length, 2);
   assert.ok(updated.some(entry => entry._id === '1' && entry.confirmationEmailSent === true));
 });
+
+test('sends postponement announcement to single registration and updates record', async () => {
+  let emailCalled = false;
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => ({ _id: 'post-1', fullName: 'Postponed User', email: 'user@example.com', announcementEmailSent: false }),
+      findByIdAndUpdate: async (_id, update) => ({ _id, ...update.$set }),
+    },
+    emailService: {
+      sendPostponementAnnouncement: async (email, name) => {
+        emailCalled = true;
+        assert.equal(email, 'user@example.com');
+        assert.equal(name, 'Postponed User');
+      },
+    },
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  await controller.sendPostponementAnnouncement({ params: { id: 'post-1' } }, response);
+
+  assert.equal(emailCalled, true);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.data.announcementEmailSent, true);
+  assert.ok(response.body.data.announcementEmailSentAt != null);
+});
+
+test('bulk postponement requires explicit confirmation and reports progress/summary', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: { find: async () => [] },
+    emailService: {},
+    logger: createLogger(),
+  });
+  const unconfirmedRes = createResponse();
+
+  // Test unconfirmed request rejected with 400
+  await controller.sendBulkPostponementAnnouncements({ body: {} }, unconfirmedRes);
+  assert.equal(unconfirmedRes.statusCode, 400);
+  assert.match(unconfirmedRes.body.message, /Confirmation is required/);
+
+  // Test confirmed request with controlled sending
+  const sent = [];
+  const updated = [];
+  const controllerConfirmed = createAdminRegistrationController({
+    registrationModel: {
+      find: async () => [
+        { _id: 'p1', fullName: 'User 1', email: 'p1@example.com', announcementEmailSent: false },
+        { _id: 'p2', fullName: 'User 2', email: 'p2@example.com', announcementEmailSent: true },
+        { _id: 'p3', fullName: 'User 3', email: 'p3@example.com', announcementEmailSent: false },
+      ],
+      findByIdAndUpdate: async (_id, update) => {
+        updated.push({ _id, ...update.$set });
+        return { _id, ...update.$set };
+      },
+    },
+    emailService: {
+      sendPostponementAnnouncement: async email => {
+        sent.push(email);
+        if (email === 'p3@example.com') throw new Error('SMTP rate limit');
+      },
+    },
+    logger: createLogger(),
+  });
+  const confirmedRes = createResponse();
+
+  await controllerConfirmed.sendBulkPostponementAnnouncements({ body: { confirmed: true, delayMs: 0 } }, confirmedRes);
+
+  assert.equal(confirmedRes.statusCode, 200);
+  assert.equal(confirmedRes.body.summary.total, 3);
+  assert.equal(confirmedRes.body.summary.sent, 1);
+  assert.equal(confirmedRes.body.summary.failed, 1);
+  assert.equal(confirmedRes.body.summary.skipped, 1);
+  assert.deepEqual(confirmedRes.body.failedEmails, ['p3@example.com']);
+  assert.deepEqual(sent, ['p1@example.com', 'p3@example.com']);
+});
+
+test('rejects malformed [object Object] and invalid IDs for postponement and confirmation with 404 without throwing', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => { throw new Error('findById should not be called'); },
+      findByIdAndUpdate: async () => { throw new Error('findByIdAndUpdate should not be called'); },
+    },
+    emailService: {},
+    logger: createLogger(),
+  });
+
+  const postRes = createResponse();
+  await controller.sendPostponementAnnouncement({ params: { id: '[object Object]' } }, postRes);
+  assert.equal(postRes.statusCode, 404);
+  assert.equal(postRes.body.message, 'Registration not found.');
+
+  const confRes = createResponse();
+  await controller.sendConfirmation({ params: { id: '[object Object]' } }, confRes);
+  assert.equal(confRes.statusCode, 404);
+  assert.equal(confRes.body.message, 'Registration not found.');
+
+  const getRes = createResponse();
+  await controller.getById({ params: { id: '[object Object]' } }, getRes);
+  assert.equal(getRes.statusCode, 404);
+  assert.equal(getRes.body.message, 'Registration not found.');
+
+  const statusRes = createResponse();
+  await controller.updateStatus({ params: { id: '[object Object]' }, body: { status: 'Confirmed' } }, statusRes);
+  assert.equal(statusRes.statusCode, 404);
+  assert.equal(statusRes.body.message, 'Registration not found.');
+});

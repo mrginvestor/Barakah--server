@@ -7,35 +7,47 @@ const nodemailer = require('nodemailer');
 
 const app = express();
 
+function isPlaceholder(value) {
+  if (!value) return true;
+  const s = String(value).trim();
+  return /^(REPLACE_|YOUR_|YOUR-|<)/i.test(s) || s === 'pass' || s === 'user';
+}
+
 async function verifySmtpConfiguration() {
   const host = process.env.SMTP_HOST || process.env.MAIL_HOST;
-  const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || 587);
+  const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || (process.env.SMTP_HOST?.includes('hostinger') ? 465 : 587));
   const username = process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.MAIL_USERNAME || process.env.MAIL_USER;
   const password = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.MAIL_PASS || process.env.MAIL_PASSWORD;
-  const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || 'false').toLowerCase() === 'true';
+  const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
 
   if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
     console.warn('SMTP configuration is incomplete. Email delivery will remain disabled until real SMTP credentials are set.');
     return;
   }
 
+  if (isPlaceholder(password) || isPlaceholder(username) || isPlaceholder(host)) {
+    console.warn(`SMTP configuration contains placeholder credentials (username: "${username}"). Skipping verification until real credentials are provided in .env.`);
+    return;
+  }
+
+  const isSecure = useSecureSocket || port === 465;
   const transporter = nodemailer.createTransport({
     host,
     port,
-    secure: useSecureSocket || port === 465,
-    requireTLS: !useSecureSocket && port !== 465,
+    secure: isSecure,
+    requireTLS: !isSecure && port !== 465,
     auth: { user: username, pass: password },
   });
 
   try {
     await transporter.verify();
-    console.log('SMTP verification successful');
+    console.log(`SMTP connected successfully to ${host}:${port} (${username})`);
   } catch (error) {
-    console.error('SMTP verification failed:', {
+    console.warn('SMTP verification notice:', {
       code: error.code || 'SMTP_VERIFY_FAILED',
       host,
       port,
-      secure: useSecureSocket || port === 465,
+      secure: isSecure,
       username,
       message: error.message || 'Authentication failed',
     });
@@ -95,6 +107,17 @@ const apiRoutes = require('./routes/api');
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api', apiRoutes);
 
+function verifyAdminAuthConfiguration() {
+  const { getMissingAuthConfiguration } = require('./controllers/adminAuthController');
+  const missing = getMissingAuthConfiguration(process.env);
+  if (missing.length > 0) {
+    console.warn(`Admin authentication configuration notice: ${missing.join(', ')} is missing. Admin login will remain disabled until set in environment variables.`);
+  } else {
+    const adminEmail = process.env.ADMIN_EMAIL || process.env.ADMIN_USER_EMAIL || process.env.ADMIN_USERNAME;
+    console.log(`Admin authentication configured successfully for ${adminEmail}`);
+  }
+}
+
 const PORT = process.env.PORT || 5000;
 
 if (!process.env.MONGODB_URI) {
@@ -105,6 +128,7 @@ if (!process.env.MONGODB_URI) {
   .then(async () => {
     console.log('MongoDB Connected successfully');
     await verifySmtpConfiguration();
+    verifyAdminAuthConfiguration();
     app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
   })
   .catch(err => console.error('MongoDB connection error:', err));

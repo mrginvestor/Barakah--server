@@ -24,6 +24,9 @@ router.get('/registrations/:id', registrationController.getById);
 router.post('/registrations/:id/send-confirmation', registrationController.sendConfirmation);
 router.post('/registrations/send-confirmations', registrationController.sendBulkConfirmations);
 router.post('/registrations/resend-confirmations', registrationController.resendBulkConfirmations);
+router.post('/registrations/:id/send-postponement', registrationController.sendPostponementAnnouncement);
+router.post('/registrations/send-postponement', registrationController.sendBulkPostponementAnnouncements);
+router.post('/registrations/resend-postponement', registrationController.resendBulkPostponementAnnouncements);
 router.put('/registrations/:id/status', registrationController.updateStatus);
 
 module.exports = router;

@@ -14,6 +14,27 @@ function readFirstDefined(environment, keys) {
   return '';
 }
 
+function getMissingAuthConfiguration(environment = process.env) {
+  const missing = [];
+  const adminEmail = readFirstDefined(environment, ['ADMIN_EMAIL', 'ADMIN_USER_EMAIL', 'ADMIN_USERNAME']);
+  const passwordHash = readFirstDefined(environment, ['ADMIN_PASSWORD_HASH', 'ADMIN_HASHED_PASSWORD', 'ADMIN_HASH']);
+  const configuredPassword = readFirstDefined(environment, ['ADMIN_PASSWORD', 'ADMIN_PLAIN_PASSWORD', 'ADMIN_PASS', 'ADMIN_PWD']);
+  const jwtSecret = readFirstDefined(environment, ['JWT_SECRET', 'ADMIN_JWT_SECRET', 'TOKEN_SECRET']);
+
+  if (!adminEmail) {
+    missing.push('ADMIN_EMAIL');
+  }
+  if (!passwordHash && !configuredPassword) {
+    missing.push('ADMIN_PASSWORD or ADMIN_PASSWORD_HASH');
+  }
+  if (!jwtSecret) {
+    missing.push('JWT_SECRET');
+  } else if (jwtSecret.length < 32) {
+    missing.push(`JWT_SECRET (length is ${jwtSecret.length}, must be at least 32 characters)`);
+  }
+  return missing;
+}
+
 function createAdminAuthController({
   comparePassword = bcrypt.compare,
   signToken = jwt.sign,
@@ -29,10 +50,14 @@ function createAdminAuthController({
 
     const environment = getEnvironment();
     const adminEmail = readFirstDefined(environment, ['ADMIN_EMAIL', 'ADMIN_USER_EMAIL', 'ADMIN_USERNAME']).toLowerCase();
-    const passwordHash = readFirstDefined(environment, ['ADMIN_PASSWORD_HASH', 'ADMIN_HASHED_PASSWORD']);
-    const configuredPassword = readFirstDefined(environment, ['ADMIN_PASSWORD', 'ADMIN_PLAIN_PASSWORD']);
-    const jwtSecret = readFirstDefined(environment, ['JWT_SECRET']);
-    if (!adminEmail || (!passwordHash && !configuredPassword) || jwtSecret.length < 32) {
+    const passwordHash = readFirstDefined(environment, ['ADMIN_PASSWORD_HASH', 'ADMIN_HASHED_PASSWORD', 'ADMIN_HASH']);
+    const configuredPassword = readFirstDefined(environment, ['ADMIN_PASSWORD', 'ADMIN_PLAIN_PASSWORD', 'ADMIN_PASS', 'ADMIN_PWD']);
+    const jwtSecret = readFirstDefined(environment, ['JWT_SECRET', 'ADMIN_JWT_SECRET', 'TOKEN_SECRET']);
+
+    const missingConfig = getMissingAuthConfiguration(environment);
+    if (missingConfig.length > 0) {
+      const safeErrorLog = (logger && typeof logger.error === 'function') ? logger.error.bind(logger) : console.error;
+      safeErrorLog(`Admin authentication configuration is incomplete: ${missingConfig.join(', ')} is missing or invalid. Set these in your deployment environment variables.`);
       return res.status(503).json({ message: 'Admin authentication is not configured.' });
     }
 
@@ -67,4 +92,9 @@ function createAdminAuthController({
   return { login, getSession };
 }
 
-module.exports = { SESSION_SECONDS, createAdminAuthController, ...createAdminAuthController() };
+module.exports = {
+  SESSION_SECONDS,
+  getMissingAuthConfiguration,
+  createAdminAuthController,
+  ...createAdminAuthController(),
+};

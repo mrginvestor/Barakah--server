@@ -2,7 +2,11 @@ const jwt = require('jsonwebtoken');
 
 const ADMIN_JWT_ISSUER = 'halal-wealth-admin';
 
-function createRequireAdmin({ verifyToken = jwt.verify, getSecret = () => process.env.JWT_SECRET } = {}) {
+function createRequireAdmin({
+  verifyToken = jwt.verify,
+  getSecret = () => process.env.JWT_SECRET || process.env.ADMIN_JWT_SECRET || process.env.TOKEN_SECRET,
+  logger = console,
+} = {}) {
   return (req, res, next) => {
     const authorization = req.get('authorization') || '';
     const match = authorization.match(/^Bearer\s+(.+)$/i);
@@ -12,6 +16,8 @@ function createRequireAdmin({ verifyToken = jwt.verify, getSecret = () => proces
 
     const secret = getSecret();
     if (!secret || secret.length < 32) {
+      const safeErrorLog = (logger && typeof logger.error === 'function') ? logger.error.bind(logger) : console.error;
+      safeErrorLog('Admin token verification failed: JWT_SECRET is missing or shorter than 32 characters in environment variables.');
       return res.status(503).json({ message: 'Admin authentication is temporarily unavailable.' });
     }
 
