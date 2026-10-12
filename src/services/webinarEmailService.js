@@ -33,7 +33,7 @@ function buildRegistrationConfirmation(recipientName, posterAttachmentPath = nul
   const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
   const text = `Dear ${recipientName},
 
-Greetings!
+Assalamu Alaikum warahmatullahi wabarakatuh!
 
 Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.
 
@@ -68,7 +68,7 @@ Halal Wealth Webinar Team`;
             <tr>
               <td style="padding:0 32px 24px;color:#243746;font-size:16px;line-height:1.7;">
                 <p style="margin:0 0 16px;">Dear ${safeName},</p>
-                <p style="margin:0 0 16px;">Greetings!</p>
+                <p style="margin:0 0 16px;">Assalamu Alaikum warahmatullahi wabarakatuh!</p>
                 <p style="margin:0 0 16px;">Thank you for registering for our upcoming webinar. We’re delighted to have you join us.</p>
                 ${posterImage}
                 <p style="margin:0 0 16px;">We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.</p>
