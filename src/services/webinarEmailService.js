@@ -7,6 +7,11 @@ const POSTER_CID = 'webinar-poster';
 const DEFAULT_FROM_NAME = 'Halal Wealth Webinar';
 const EMAIL_SUBJECT = 'Thank You for Registering for Our Webinar';
 const POSTPONEMENT_EMAIL_SUBJECT = 'Important Update: Halal Wealth Webinar Postponed to 18 October 2026';
+const ZOOM_JOINING_EMAIL_SUBJECT = 'Your Zoom Joining Link – Halal Wealth Webinar | 18 October 2026';
+const REMINDER_ONE_HOUR_EMAIL_SUBJECT = 'Webinar Starting in One Hour | Halal Trade, Investments & Generational Wealth';
+const ZOOM_LINK = 'https://us06web.zoom.us/j/81487983324?pwd=iiWszjuBKKDHZ7SNibjY9aUkfFVEvS.1';
+const ZOOM_MEETING_ID = '814 8798 3324';
+const ZOOM_PASSCODE = '666991';
 
 function readFirstDefined(environment, keys) {
   for (const key of keys) {
@@ -216,6 +221,186 @@ Halal Wealth Webinar Team`;
   return { subject: POSTPONEMENT_EMAIL_SUBJECT, text, html, safeName };
 }
 
+function buildZoomJoiningDetails(recipientName, posterAttachmentPath = null) {
+  const safeName = escapeHtml(recipientName || 'there');
+  const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
+  const text = `Assalamu Alaikum Wa Rahmatullahi Wa Barakatuh,
+
+We are pleased to welcome you to our upcoming Halal Wealth Webinar.
+
+Topic: Halal Trade, Investments & Generational Wealth
+
+Date: Sunday, 18 October 2026
+
+Time:
+- India: 11:00 AM IST
+- Singapore: 1:30 PM SGT
+- UAE: 9:30 AM GST
+- Saudi Arabia (KSA): 8:30 AM AST
+
+Join the webinar using the Zoom link below:
+
+${ZOOM_LINK}
+
+Meeting ID: ${ZOOM_MEETING_ID}
+
+Passcode: ${ZOOM_PASSCODE}
+
+We encourage you to join a few minutes before the session begins.
+
+We look forward to welcoming you to an insightful session on Halal trade, ethical investments, financial planning, and generational wealth.
+
+JazakAllahu Khairan,
+
+Barakah Team
+Halal Wealth Webinar`;
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your Zoom Joining Link – Halal Wealth Webinar | 18 October 2026</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f5f7f8;color:#243746;font-family:Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f5f7f8;width:100%;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;max-width:620px;background-color:#ffffff;border:1px solid #dfe7eb;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(8,43,73,0.06);">
+            <tr>
+              <td style="padding:28px 32px 16px;background-color:#ffffff;border-bottom:1px solid #edf2f5;">
+                <p style="margin:0 0 8px;color:#b98a2a;font-size:12px;font-weight:700;letter-spacing:2px;line-height:1.4;">HALAL WEALTH WEBINAR</p>
+                <h1 style="margin:0;color:#0e2d3d;font-size:24px;line-height:1.3;font-weight:700;">Your Zoom Joining Link</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 32px;color:#243746;font-size:15px;line-height:1.7;">
+                <p style="margin:0 0 16px;">Assalamu Alaikum Wa Rahmatullahi Wa Barakatuh,</p>
+                <p style="margin:0 0 16px;">We are pleased to welcome you to our upcoming Halal Wealth Webinar.</p>
+                
+                <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">Halal Trade, Investments &amp; Generational Wealth</span></p>
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Date: <span style="font-weight:400;color:#243746;">Sunday, 18 October 2026</span></p>
+                  <p style="margin:0 0 4px;font-weight:700;color:#0e2d3d;">Time:</p>
+                  <ul style="margin:0 0 0 20px;padding:0;color:#243746;">
+                    <li style="margin-bottom:4px;">India: <strong>11:00 AM IST</strong></li>
+                    <li style="margin-bottom:4px;">Singapore: <strong>1:30 PM SGT</strong></li>
+                    <li style="margin-bottom:4px;">UAE: <strong>9:30 AM GST</strong></li>
+                    <li style="margin-bottom:4px;">Saudi Arabia (KSA): <strong>8:30 AM AST</strong></li>
+                  </ul>
+                </div>
+
+                <div style="background-color:#082b49;color:#ffffff;padding:24px 20px;margin:24px 0;border-radius:10px;text-align:center;">
+                  <p style="margin:0 0 12px;font-size:16px;font-weight:700;color:#ffffff;">Join the webinar using the Zoom link below:</p>
+                  <p style="margin:0 0 16px;">
+                    <a href="${ZOOM_LINK}" style="display:inline-block;background-color:#d4af5a;color:#082b49;font-weight:700;font-size:15px;padding:12px 24px;border-radius:6px;text-decoration:none;">Click Here to Join Zoom Webinar</a>
+                  </p>
+                  <p style="margin:0 0 8px;font-size:13px;color:#e6c875;word-break:break-all;">
+                    <a href="${ZOOM_LINK}" style="color:#e6c875;text-decoration:underline;">${ZOOM_LINK}</a>
+                  </p>
+                  <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.15);font-size:14px;">
+                    <span style="color:#ffffff;margin-right:16px;">Meeting ID: <strong style="color:#d4af5a;">${ZOOM_MEETING_ID}</strong></span>
+                    <span style="color:#ffffff;">Passcode: <strong style="color:#d4af5a;">${ZOOM_PASSCODE}</strong></span>
+                  </div>
+                </div>
+
+                ${posterImage}
+
+                <p style="margin:0 0 16px;">We encourage you to join a few minutes before the session begins.</p>
+                <p style="margin:0 0 20px;">We look forward to welcoming you to an insightful session on Halal trade, ethical investments, financial planning, and generational wealth.</p>
+                
+                <p style="margin:0 0 4px;">JazakAllahu Khairan,</p>
+                <p style="margin:0 0 2px;color:#0e2d3d;font-weight:700;">Barakah Team</p>
+                <p style="margin:0;color:#6b7c87;font-size:14px;">Halal Wealth Webinar</p>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;color:#6b7c87;font-size:12px;line-height:1.5;">Halal Wealth Webinar &bull; info@halalwealth.finance</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject: ZOOM_JOINING_EMAIL_SUBJECT, text, html, safeName };
+}
+
+function buildOneHourReminder(recipientName, posterAttachmentPath = null) {
+  const safeName = escapeHtml(recipientName || 'there');
+  const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
+  const text = `Assalamu Alaikum Wr Wb,
+
+We are commencing our Tamil webinar on Halal Trade, Investments & Generational Wealth in an hour.
+
+🗓️ Sunday, 18 October 2026
+🕐 11:00 am IST (1:30 pm SG | 9:30 am UAE | 8:30 am KSA)
+
+Link to join: ${ZOOM_LINK}
+
+See you in a while, Insha'Allah!`;
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webinar Starting in One Hour | Halal Trade, Investments &amp; Generational Wealth</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f5f7f8;color:#243746;font-family:Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f5f7f8;width:100%;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;max-width:620px;background-color:#ffffff;border:1px solid #dfe7eb;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(8,43,73,0.06);">
+            <tr>
+              <td style="padding:28px 32px 16px;background-color:#ffffff;border-bottom:1px solid #edf2f5;">
+                <p style="margin:0 0 8px;color:#b98a2a;font-size:12px;font-weight:700;letter-spacing:2px;line-height:1.4;">HALAL WEALTH WEBINAR</p>
+                <h1 style="margin:0;color:#0e2d3d;font-size:24px;line-height:1.3;font-weight:700;">Webinar Starting in One Hour</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 32px;color:#243746;font-size:15px;line-height:1.7;">
+                <p style="margin:0 0 16px;">Assalamu Alaikum Wr Wb,</p>
+                <p style="margin:0 0 18px;">We are commencing our Tamil webinar on <strong>Halal Trade, Investments &amp; Generational Wealth</strong> in an hour.</p>
+
+                <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">🗓️ Sunday, 18 October 2026</p>
+                  <p style="margin:0 0 4px;font-weight:700;color:#0e2d3d;">🕐 11:00 am IST (1:30 pm SG | 9:30 am UAE | 8:30 am KSA)</p>
+                </div>
+
+                <div style="background-color:#082b49;color:#ffffff;padding:24px 20px;margin:24px 0;border-radius:10px;text-align:center;">
+                  <p style="margin:0 0 12px;font-size:16px;font-weight:700;color:#ffffff;">Join the webinar using the Zoom link below:</p>
+                  <p style="margin:0 0 16px;">
+                    <a href="${ZOOM_LINK}" style="display:inline-block;background-color:#d4af5a;color:#082b49;font-weight:700;font-size:15px;padding:12px 24px;border-radius:6px;text-decoration:none;">Click Here to Join Zoom Webinar</a>
+                  </p>
+                  <p style="margin:0 0 8px;font-size:13px;color:#e6c875;word-break:break-all;">
+                    Link to join: <a href="${ZOOM_LINK}" style="color:#e6c875;text-decoration:underline;">${ZOOM_LINK}</a>
+                  </p>
+                  <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.15);font-size:14px;">
+                    <span style="color:#ffffff;margin-right:16px;">Meeting ID: <strong style="color:#d4af5a;">${ZOOM_MEETING_ID}</strong></span>
+                    <span style="color:#ffffff;">Passcode: <strong style="color:#d4af5a;">${ZOOM_PASSCODE}</strong></span>
+                  </div>
+                </div>
+
+                ${posterImage}
+
+                <p style="margin:20px 0 16px;font-weight:600;color:#0e2d3d;">See you in a while, Insha&#39;Allah!</p>
+
+                <p style="margin:0 0 4px;">JazakAllahu Khairan,</p>
+                <p style="margin:0 0 2px;color:#0e2d3d;font-weight:700;">Barakah Team</p>
+                <p style="margin:0;color:#6b7c87;font-size:14px;">Halal Wealth Webinar</p>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;color:#6b7c87;font-size:12px;line-height:1.5;">Halal Wealth Webinar &bull; info@halalwealth.finance</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject: REMINDER_ONE_HOUR_EMAIL_SUBJECT, text, html, safeName };
+}
+
 function resolvePosterPath() {
   const candidatePaths = [
     path.resolve(__dirname, '..', '..', 'assets', 'webinar tamil.png'),
@@ -351,15 +536,32 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
     return sendMailForTemplate(recipientEmail, messageContent, 'webinar postponement announcement');
   }
 
-  return { sendRegistrationConfirmation, sendPostponementAnnouncement };
+  async function sendZoomJoiningLink(recipientEmail, recipientName) {
+    const messageContent = buildZoomJoiningDetails(recipientName, resolvePosterPath());
+    return sendMailForTemplate(recipientEmail, messageContent, 'webinar zoom joining link');
+  }
+
+  async function sendOneHourReminder(recipientEmail, recipientName) {
+    const messageContent = buildOneHourReminder(recipientName, resolvePosterPath());
+    return sendMailForTemplate(recipientEmail, messageContent, 'webinar one-hour reminder');
+  }
+
+  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder };
 }
 
 module.exports = {
   EMAIL_SUBJECT,
   POSTPONEMENT_EMAIL_SUBJECT,
+  ZOOM_JOINING_EMAIL_SUBJECT,
+  REMINDER_ONE_HOUR_EMAIL_SUBJECT,
+  ZOOM_LINK,
+  ZOOM_MEETING_ID,
+  ZOOM_PASSCODE,
   POSTER_CID,
   buildRegistrationConfirmation,
   buildPostponementAnnouncement,
+  buildZoomJoiningDetails,
+  buildOneHourReminder,
   createWebinarEmailService,
   ...createWebinarEmailService(),
 };

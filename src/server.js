@@ -96,6 +96,7 @@ const corsOptions = {
   credentials: false,
   optionsSuccessStatus: 204,
 };
+app.set('trust proxy', 1);
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -124,12 +125,20 @@ if (!process.env.MONGODB_URI) {
   console.error('MONGODB_URI is required. Set it in the environment before starting the server.');
   process.exitCode = 1;
 } else {
-  mongoose.connect(process.env.MONGODB_URI)
-  .then(async () => {
+  mongoose.connect(process.env.MONGODB_URI, {
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+  })
+  .then(() => {
     console.log('MongoDB Connected successfully');
-    await verifySmtpConfiguration();
     verifyAdminAuthConfiguration();
     app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
+    // Run SMTP verification asynchronously in background so HTTP server is immediately responsive
+    verifySmtpConfiguration().catch(err => {
+      console.warn('Background SMTP verification notice:', err?.message || err);
+    });
   })
   .catch(err => console.error('MongoDB connection error:', err));
 }

@@ -62,6 +62,10 @@ function createAdminAuthController({
     }
 
     try {
+      if (email !== adminEmail) {
+        return res.status(401).json({ message: 'Invalid admin email or password.' });
+      }
+
       let passwordMatches = false;
       if (passwordHash && /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(passwordHash)) {
         passwordMatches = await comparePassword(password, passwordHash);
@@ -69,7 +73,7 @@ function createAdminAuthController({
         passwordMatches = password === configuredPassword;
       }
 
-      if (email !== adminEmail || !passwordMatches) {
+      if (!passwordMatches) {
         return res.status(401).json({ message: 'Invalid admin email or password.' });
       }
 

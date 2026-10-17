@@ -277,4 +277,210 @@ test('rejects malformed [object Object] and invalid IDs for postponement and con
   await controller.updateStatus({ params: { id: '[object Object]' }, body: { status: 'Confirmed' } }, statusRes);
   assert.equal(statusRes.statusCode, 404);
   assert.equal(statusRes.body.message, 'Registration not found.');
+
+  const zoomRes = createResponse();
+  await controller.sendSingleZoomJoiningLink({ params: { id: '[object Object]' } }, zoomRes);
+  assert.equal(zoomRes.statusCode, 404);
+  assert.equal(zoomRes.body.message, 'Registration not found.');
+});
+
+test('sends Zoom joining link to single registration and updates record', async () => {
+  let emailSentTo;
+  let updateData;
+  const registration = { _id: '64b7abdecf9f6cd9a54b4b6e', fullName: 'Sister Fatima', email: 'fatima@example.com', joiningEmailSent: false };
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => registration,
+      findByIdAndUpdate: async (id, update) => {
+        updateData = update.$set;
+        return { ...registration, ...updateData };
+      },
+    },
+    emailService: {
+      sendZoomJoiningLink: async email => { emailSentTo = email; },
+    },
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  await controller.sendSingleZoomJoiningLink({ params: { id: '64b7abdecf9f6cd9a54b4b6e' } }, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(emailSentTo, 'fatima@example.com');
+  assert.equal(updateData.joiningEmailSent, true);
+  assert.equal(response.body.data.joiningEmailStatus, 'Sent');
+});
+
+test('bulk Zoom joining link requires explicit confirmation, skips already sent, and reports summary', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: { find: async () => [] },
+    emailService: {},
+    logger: createLogger(),
+  });
+  const unconfirmedRes = createResponse();
+
+  // Test unconfirmed request rejected with 400
+  await controller.sendBulkZoomJoiningLinks({ body: {} }, unconfirmedRes);
+  assert.equal(unconfirmedRes.statusCode, 400);
+  assert.match(unconfirmedRes.body.message, /Confirmation is required/);
+
+  // Test confirmed request with skipping already sent
+  const sent = [];
+  const updated = [];
+  const controllerConfirmed = createAdminRegistrationController({
+    registrationModel: {
+      find: async () => [
+        { _id: 'z1', fullName: 'User 1', email: 'z1@example.com', joiningEmailSent: false },
+        { _id: 'z2', fullName: 'User 2', email: 'z2@example.com', joiningEmailSent: true },
+        { _id: 'z3', fullName: 'User 3', email: 'z3@example.com', joiningEmailSent: false },
+      ],
+      findByIdAndUpdate: async (_id, update) => {
+        updated.push({ _id, ...update.$set });
+        return { _id, ...update.$set };
+      },
+    },
+    emailService: {
+      sendZoomJoiningLink: async email => {
+        sent.push(email);
+        if (email === 'z3@example.com') throw new Error('SMTP rate limit');
+      },
+    },
+    logger: createLogger(),
+  });
+  const confirmedRes = createResponse();
+
+  await controllerConfirmed.sendBulkZoomJoiningLinks({ body: { confirmed: true, delayMs: 0 } }, confirmedRes);
+
+  assert.equal(confirmedRes.statusCode, 200);
+  assert.equal(confirmedRes.body.summary.total, 3);
+  assert.equal(confirmedRes.body.summary.sent, 1);
+  assert.equal(confirmedRes.body.summary.failed, 1);
+  assert.equal(confirmedRes.body.summary.skipped, 1);
+  assert.deepEqual(confirmedRes.body.failedEmails, ['z3@example.com']);
+  assert.deepEqual(sent, ['z1@example.com', 'z3@example.com']);
+});
+
+test('returns Zoom joining campaign preview with accurate counts and email template', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      find: async () => [
+        { _id: 'z1', joiningEmailSent: true },
+        { _id: 'z2', joiningEmailSent: false },
+        { _id: 'z3', joiningEmailSent: false, joiningEmailLastError: 'SMTP connection failed' },
+      ],
+    },
+    emailService: {},
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  await controller.getJoiningCampaignPreview({}, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.deepEqual(response.body.summary, {
+    total: 3,
+    sent: 1,
+    pending: 1,
+    failed: 1,
+    eligibleCount: 2,
+  });
+  assert.equal(response.body.preview.subject, 'Your Zoom Joining Link – Halal Wealth Webinar | 18 October 2026');
+  assert.match(response.body.preview.text, /814 8798 3324/);
+  assert.match(response.body.preview.text, /666991/);
+});
+
+test('bulk one-hour reminder requires explicit confirmation, deduplicates emails, and reports summary', async () => {
+  const registrations = [
+    { _id: 'r1', email: 'user1@example.com', fullName: 'User One', reminderEmailSent: false },
+    { _id: 'r2', email: 'user1@example.com', fullName: 'User One Duplicate', reminderEmailSent: false },
+    { _id: 'r3', email: 'invalid-email', fullName: 'Invalid User', reminderEmailSent: false },
+    { _id: 'r4', email: 'user2@example.com', fullName: 'User Two', reminderEmailSent: false },
+  ];
+  const sent = [];
+
+  const registrationModel = {
+    find: async () => registrations,
+    collection: {
+      updateOne: async () => ({ matchedCount: 1, modifiedCount: 1 }),
+      findOne: async filter => registrations.find(r => r._id === filter._id || r.email === filter.email),
+    },
+    findOneAndUpdate: async (filter, update) => {
+      const reg = registrations.find(r => r._id === filter._id || r.email === filter.email);
+      if (reg) Object.assign(reg, update.$set);
+      return reg;
+    },
+    findByIdAndUpdate: async (id, update) => {
+      const reg = registrations.find(r => r._id === id);
+      if (reg) Object.assign(reg, update.$set);
+      return reg;
+    },
+  };
+
+  const emailService = {
+    sendOneHourReminder: async (email, name) => {
+      if (email === 'user2@example.com') {
+        throw new Error('SMTP connection refused');
+      }
+      sent.push({ email, name });
+      return { accepted: [email], messageId: '<test-reminder-msg-id>' };
+    },
+  };
+
+  const controller = createAdminRegistrationController({
+    registrationModel,
+    emailService,
+    logger: createLogger(),
+  });
+
+  // 1. Missing confirmation rejected
+  const unconfirmedRes = createResponse();
+  await controller.sendBulkOneHourReminders({ body: {} }, unconfirmedRes);
+  assert.equal(unconfirmedRes.statusCode, 400);
+
+  // 2. Confirmed run
+  const confirmedRes = createResponse();
+  await controller.sendBulkOneHourReminders({ body: { confirmed: true, delayMs: 0 } }, confirmedRes);
+
+  assert.equal(confirmedRes.statusCode, 200);
+  assert.equal(confirmedRes.body.success, false); // has 1 failure
+  assert.equal(confirmedRes.body.summary.total, 4);
+  assert.equal(confirmedRes.body.summary.eligible, 2); // user1 and user2 (dup skipped, invalid skipped)
+  assert.equal(confirmedRes.body.summary.sent, 1); // user1 sent
+  assert.equal(confirmedRes.body.summary.failed, 1); // user2 failed
+  assert.equal(confirmedRes.body.summary.skipped, 2);
+  assert.deepEqual(confirmedRes.body.sentEmails, ['user1@example.com']);
+  assert.equal(confirmedRes.body.failedEmails.length, 1);
+  assert.equal(confirmedRes.body.failedEmails[0].email, 'user2@example.com');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].email, 'user1@example.com');
+});
+
+test('bulk one-hour reminder prevents concurrent duplicate campaign runs', async () => {
+  let releaseFirstSend;
+  const slowEmailService = {
+    sendOneHourReminder: async () => new Promise(resolve => { releaseFirstSend = resolve; }),
+  };
+
+  const controller = createAdminRegistrationController({
+    registrationModel: { find: async () => [{ _id: 'r1', email: 'slow@example.com', fullName: 'Slow User' }] },
+    emailService: slowEmailService,
+    logger: createLogger(),
+  });
+
+  const firstRes = createResponse();
+  const firstPromise = controller.sendBulkOneHourReminders({ body: { confirmed: true, delayMs: 0 } }, firstRes);
+
+  // Attempt concurrent second run
+  const secondRes = createResponse();
+  await controller.sendBulkOneHourReminders({ body: { confirmed: true, delayMs: 0 } }, secondRes);
+
+  assert.equal(secondRes.statusCode, 409);
+  assert.match(secondRes.body.message, /already in progress/);
+
+  // Complete first run
+  releaseFirstSend({ accepted: ['slow@example.com'], messageId: '<msg-1>' });
+  await firstPromise;
+  assert.equal(firstRes.statusCode, 200);
 });

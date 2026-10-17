@@ -22,10 +22,23 @@ function normalizeLegacyRegistration(registration) {
   };
 }
 
+const REGISTRATION_CLOSED_MESSAGE = 'Registration for this webinar has now closed. We appreciate your interest and support.';
+
+function isWebinarRegistrationClosed(environment = process.env) {
+  if (environment.WEBINAR_REGISTRATION_CLOSED !== undefined) {
+    return String(environment.WEBINAR_REGISTRATION_CLOSED).toLowerCase() !== 'false';
+  }
+  if (environment.WEBINAR_REGISTRATION_OPEN !== undefined) {
+    return String(environment.WEBINAR_REGISTRATION_OPEN).toLowerCase() !== 'true';
+  }
+  return true;
+}
+
 function createWebinarRegistrationHandler({
   registrationModel = WebinarRegistration,
   emailService = webinarEmailService,
   logger = console,
+  isRegistrationClosed = isWebinarRegistrationClosed,
 } = {}) {
   const safeLogger = {
     ...console,
@@ -36,6 +49,18 @@ function createWebinarRegistrationHandler({
 
   return async (req, res) => {
     try {
+      const closed = typeof isRegistrationClosed === 'function'
+        ? isRegistrationClosed()
+        : Boolean(isRegistrationClosed);
+
+      if (closed) {
+        return res.status(403).json({
+          success: false,
+          closed: true,
+          message: REGISTRATION_CLOSED_MESSAGE,
+        });
+      }
+
       const submittedPhone = String(req.body.whatsapp || req.body.phone || '').trim();
       const parsedPhone = parsePhoneNumberFromString(submittedPhone);
       const normalizedPhone = parsedPhone?.isValid() ? parsedPhone.number : submittedPhone;
@@ -66,14 +91,30 @@ function createWebinarRegistrationHandler({
 
       const registration = await registrationModel.create(payload);
       let confirmationEmailSent = false;
+      let joiningEmailSent = false;
       try {
-        await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
+        if (typeof emailService.sendZoomJoiningLink === 'function') {
+          await emailService.sendZoomJoiningLink(registration.email, registration.fullName);
+          joiningEmailSent = true;
+          safeLogger.info('Webinar registration Zoom joining email sent.', { email: registration.email });
+        } else if (typeof emailService.sendRegistrationConfirmation === 'function') {
+          await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
+          safeLogger.info('Webinar registration confirmation email sent.', { email: registration.email });
+        }
         confirmationEmailSent = true;
-        safeLogger.info('Webinar registration confirmation email sent.', { email: registration.email });
         if (typeof registrationModel.findByIdAndUpdate === 'function') {
           await registrationModel.findByIdAndUpdate(
             registration._id,
-            { $set: { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null } },
+            {
+              $set: {
+                joiningEmailSent: joiningEmailSent || false,
+                joiningEmailSentAt: joiningEmailSent ? new Date() : null,
+                joiningEmailLastError: null,
+                confirmationEmailSent: true,
+                confirmationEmailSentAt: new Date(),
+                confirmationEmailLastError: null,
+              },
+            },
             { new: true, runValidators: true },
           );
         }
@@ -86,7 +127,16 @@ function createWebinarRegistrationHandler({
         if (typeof registrationModel.findByIdAndUpdate === 'function') {
           await registrationModel.findByIdAndUpdate(
             registration._id,
-            { $set: { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500) } },
+            {
+              $set: {
+                joiningEmailSent: false,
+                joiningEmailSentAt: null,
+                joiningEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500),
+                confirmationEmailSent: false,
+                confirmationEmailSentAt: null,
+                confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500),
+              },
+            },
             { new: true, runValidators: true },
           ).catch(() => {});
         }
@@ -96,6 +146,7 @@ function createWebinarRegistrationHandler({
         success: true,
         message: 'Registration successful',
         confirmationEmailSent,
+        joiningEmailSent,
         data: registration,
       });
     } catch (error) {
@@ -107,8 +158,26 @@ function createWebinarRegistrationHandler({
   }
 }
 
+function getWebinarRegistrationStatusHandler({
+  isRegistrationClosed = isWebinarRegistrationClosed,
+} = {}) {
+  return (req, res) => {
+    const closed = typeof isRegistrationClosed === 'function'
+      ? isRegistrationClosed()
+      : Boolean(isRegistrationClosed);
+    return res.json({
+      closed,
+      message: closed ? REGISTRATION_CLOSED_MESSAGE : 'Registration is open.',
+    });
+  };
+}
+
+exports.REGISTRATION_CLOSED_MESSAGE = REGISTRATION_CLOSED_MESSAGE;
+exports.isWebinarRegistrationClosed = isWebinarRegistrationClosed;
 exports.createWebinarRegistration = createWebinarRegistrationHandler();
 exports.createWebinarRegistrationHandler = createWebinarRegistrationHandler;
+exports.getWebinarRegistrationStatus = getWebinarRegistrationStatusHandler();
+exports.getWebinarRegistrationStatusHandler = getWebinarRegistrationStatusHandler;
 
 exports.getWebinarRegistrations = async (req, res) => {
   try {

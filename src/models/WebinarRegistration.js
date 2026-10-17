@@ -22,6 +22,18 @@ const webinarRegistrationSchema = new mongoose.Schema({
   announcementEmailSent: { type: Boolean, default: false },
   announcementEmailSentAt: { type: Date, default: null },
   announcementEmailLastError: { type: String, default: null },
+  joiningEmailSent: { type: Boolean, default: false },
+  joiningEmailSentAt: { type: Date, default: null },
+  joiningEmailLastError: { type: String, default: null },
+  reminderEmailSent: { type: Boolean, default: false },
+  reminderEmailSentAt: { type: Date, default: null },
+  reminderEmailLastError: { type: String, default: null },
+  registrationId: { type: String, default: null, trim: true },
 }, { timestamps: true });
+
+webinarRegistrationSchema.index({ email: 1 });
+webinarRegistrationSchema.index({ createdAt: -1 });
+webinarRegistrationSchema.index({ status: 1, createdAt: -1 });
+webinarRegistrationSchema.index({ registrationId: 1 });
 
 module.exports = mongoose.model('WebinarRegistration', webinarRegistrationSchema);
