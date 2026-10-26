@@ -215,10 +215,147 @@ test('reports registration closure accurately in status endpoint handler', async
   assert.equal(openRes.body.message, 'Registration is open.');
 });
 
-test('isWebinarRegistrationClosed defaults to true and respects environment variables', () => {
-  assert.equal(isWebinarRegistrationClosed({}), true);
+test('isWebinarRegistrationClosed defaults to false and respects environment variables', () => {
+  assert.equal(isWebinarRegistrationClosed({}), false);
   assert.equal(isWebinarRegistrationClosed({ WEBINAR_REGISTRATION_CLOSED: 'true' }), true);
   assert.equal(isWebinarRegistrationClosed({ WEBINAR_REGISTRATION_CLOSED: 'false' }), false);
   assert.equal(isWebinarRegistrationClosed({ WEBINAR_REGISTRATION_OPEN: 'true' }), false);
   assert.equal(isWebinarRegistrationClosed({ WEBINAR_REGISTRATION_OPEN: 'false' }), true);
+});
+
+test('accepts business webinar registration with company, website, country and new interests', async () => {
+  let createdPayload;
+  const businessPayload = {
+    fullName: 'Tariq Al-Mansoor',
+    whatsapp: '+971501234567',
+    phoneCountry: 'AE',
+    email: 'tariq@mansoorgroup.com',
+    occupation: 'Managing Director / CEO',
+    industry: 'Trading, Import & Export',
+    companyName: 'Al-Mansoor Trading LLC',
+    businessWebsite: 'https://almansoor.ae',
+    country: 'United Arab Emirates',
+    city: 'Dubai',
+    financialInterests: ['Business Growth and Trade', 'Halal Investments and Wealth Management', 'Generational Wealth Planning'],
+    additionalInfo: 'Looking to scale Shariah-compliant export financing and corporate sukuk.',
+    webinarVersion: 'Business Webinar 2026',
+    consent: true,
+  };
+
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async p => { createdPayload = p; return { ...p, _id: 'biz-1' }; },
+    },
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+
+  await handler({ body: businessPayload }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.success, true);
+  assert.equal(createdPayload.companyName, 'Al-Mansoor Trading LLC');
+  assert.equal(createdPayload.businessWebsite, 'https://almansoor.ae');
+  assert.equal(createdPayload.country, 'United Arab Emirates');
+  assert.equal(createdPayload.city, 'Dubai');
+  assert.equal(createdPayload.designation, 'Managing Director / CEO');
+  assert.equal(createdPayload.webinarVersion, 'Business Webinar 2026');
+  assert.ok(createdPayload.registrationId.startsWith('HWW-B26-'));
+});
+
+
+test('accepts November 1 inclusive registration with age group, state, and questions', async () => {
+  let createdPayload;
+  const novPayload = {
+    fullName: 'Zayd Patel',
+    whatsapp: '+447123456789',
+    phoneCountry: 'GB',
+    email: 'zayd@example.co.uk',
+    occupation: 'Student',
+    country: 'United Kingdom',
+    state: 'Greater London',
+    city: 'London',
+    ageGroup: '18–24',
+    financialInterests: ['Learning the Basics of Finance', 'Halal Investments', 'Personal Financial Planning'],
+    questionsOrTopics: 'How to start investing in halal index funds with small amounts?',
+    webinarSource: 'Friends or Family',
+    consent: true,
+  };
+
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async p => { createdPayload = p; return { ...p, _id: 'nov-1' }; },
+    },
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+
+  await handler({ body: novPayload }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.success, true);
+  assert.equal(createdPayload.occupation, 'Student');
+  assert.equal(createdPayload.ageGroup, '18–24');
+  assert.equal(createdPayload.country, 'United Kingdom');
+  assert.equal(createdPayload.state, 'Greater London');
+  assert.equal(createdPayload.city, 'London');
+  assert.equal(createdPayload.questionsOrTopics, 'How to start investing in halal index funds with small amounts?');
+  assert.equal(createdPayload.webinarVersion, 'November 1, 2026 Webinar');
+  assert.ok(createdPayload.registrationId.startsWith('HWW-N26-'));
+});
+
+test('allows user from previous October webinar to register for November 1 webinar with same email', async () => {
+  let createdPayload;
+  const mockRegistrationModel = {
+    findOne: async query => {
+      if (query.email === 'october.attendee@example.com') {
+        const matchesOct = query.$or?.some(c => c.webinarId === 'halal-wealth-oct-2026' || c.webinarVersion === 'October 2026 Webinar');
+        if (matchesOct) return { _id: 'oct-1', email: 'october.attendee@example.com', webinarId: 'halal-wealth-oct-2026' };
+      }
+      return null;
+    },
+    create: async payload => {
+      createdPayload = payload;
+      return { _id: 'nov-new-1', ...payload };
+    },
+    findByIdAndUpdate: async () => {},
+  };
+
+  const handler = createWebinarRegistrationHandler({
+    registrationModel: mockRegistrationModel,
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: { info() {}, error() {} },
+    isRegistrationClosed: () => false,
+  });
+
+  const res = {
+    statusCode: null,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(data) { this.body = data; return this; },
+  };
+
+  await handler({
+    body: {
+      fullName: 'October Attendee',
+      email: 'october.attendee@example.com',
+      whatsapp: '+6591234567',
+      country: 'Singapore',
+      occupation: 'Salaried Employee',
+      location: 'Singapore',
+      webinarId: 'halal-wealth-nov-2026',
+      financialInterests: ['Personal Financial Planning'],
+      consent: true,
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(createdPayload.webinarId, 'halal-wealth-nov-2026');
+  assert.equal(createdPayload.email, 'october.attendee@example.com');
 });

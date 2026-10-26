@@ -12,6 +12,14 @@ const {
   buildPostponementAnnouncement,
   buildZoomJoiningDetails,
   buildOneHourReminder,
+  DEFAULT_FEEDBACK_EMAIL_SUBJECT,
+  DEFAULT_FEEDBACK_FORM_URL,
+  DEFAULT_FEEDBACK_WHATSAPP_URL,
+  DEFAULT_FEEDBACK_YOUTUBE_URL,
+  DEFAULT_FEEDBACK_INSTAGRAM_URL,
+  DEFAULT_FEEDBACK_BODY_TEXT,
+  buildFeedbackEmail,
+  buildCustomEmail,
   createWebinarEmailService,
 } = require('./webinarEmailService');
 
@@ -222,10 +230,145 @@ test('sends multipart one-hour reminder email using mock transporter without rea
 
   assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
   assert.equal(message.to, 'reminder-user@example.com');
-  assert.equal(message.subject, 'Webinar Starting in One Hour | Halal Trade, Investments & Generational Wealth');
+  assert.equal(message.subject, REMINDER_ONE_HOUR_EMAIL_SUBJECT);
   assert.match(message.text, /Assalamu Alaikum Wr Wb,/);
   assert.match(message.text, /See you in a while, Insha'Allah!/);
   assert.match(message.html, /https:\/\/us06web.zoom.us\/j\/81487983324/);
   assert.equal(message.attachments.length, 1);
   assert.equal(message.attachments[0].cid, 'webinar-poster');
+});
+
+test('builds the feedback email with exact required wording, feedback URL, and community links', () => {
+  const email = buildFeedbackEmail({}, 'Brother Omar');
+
+  assert.equal(email.subject, 'Thank You for Attending | Feedback & Future Halal Investing Programs');
+  assert.equal(DEFAULT_FEEDBACK_EMAIL_SUBJECT, email.subject);
+  assert.match(email.text, /Assalamu Alaikum Wr Wb,/);
+  assert.match(email.text, /Hope you have joined our webinar yesterday and benefited from the knowledge shared\./);
+  assert.match(email.text, /We would like to hear your feedback and suggestions to help us better plan our future programs\./);
+  assert.match(email.text, /Kindly submit this feedback form: https:\/\/forms\.gle\/ysMqbTQ37BSnrbGT9/);
+  assert.match(email.text, /We look forward to having you join our Halal Investing webinar planned for November 2026\. Do stay connected with us\. JazakAllah\./);
+  assert.match(email.text, /WhatsApp Community: https:\/\/chat\.whatsapp\.com\/I9d41QdjbOGA43kYph2noq/);
+  assert.match(email.text, /YouTube: youtube\.com\/@ethicalfinancebasithtamil/);
+  assert.match(email.text, /Instagram: instagram\.com\/ethicalfinancebasith\.tamil/);
+
+  // HTML contains valid clickable HTTPS URLs
+  assert.match(email.html, /href="https:\/\/forms\.gle\/ysMqbTQ37BSnrbGT9"/);
+  assert.match(email.html, /href="https:\/\/chat\.whatsapp\.com\/I9d41QdjbOGA43kYph2noq"/);
+  assert.match(email.html, /href="https:\/\/youtube\.com\/@ethicalfinancebasithtamil"/);
+  assert.match(email.html, /href="https:\/\/instagram\.com\/ethicalfinancebasith\.tamil"/);
+  assert.doesNotMatch(email.html, /Zoom/i);
+  assert.doesNotMatch(email.html, /Postponed/i);
+});
+
+test('buildFeedbackEmail supports dynamic custom configuration', () => {
+  const customConfig = {
+    subject: 'Custom Feedback Subject',
+    bodyText: 'Custom body text with updates.',
+    feedbackFormUrl: 'https://forms.gle/custom123',
+    whatsappUrl: 'https://chat.whatsapp.com/customGroup',
+    youtubeUrl: 'https://youtube.com/@customChannel',
+    instagramUrl: 'https://instagram.com/customAccount',
+  };
+  const email = buildFeedbackEmail(customConfig, 'Sister Maryam');
+  assert.equal(email.subject, 'Custom Feedback Subject');
+  assert.equal(email.text, 'Custom body text with updates.');
+  assert.match(email.html, /href="https:\/\/forms\.gle\/custom123"/);
+  assert.match(email.html, /href="https:\/\/chat\.whatsapp\.com\/customGroup"/);
+  assert.match(email.html, /href="https:\/\/youtube\.com\/@customChannel"/);
+  assert.match(email.html, /href="https:\/\/instagram\.com\/customAccount"/);
+});
+
+test('sends feedback email using mock transporter without real network/SMTP', async () => {
+  const originalEnvironment = {
+    MAIL_HOST: process.env.MAIL_HOST,
+    MAIL_PORT: process.env.MAIL_PORT,
+    MAIL_USERNAME: process.env.MAIL_USERNAME,
+    MAIL_PASSWORD: process.env.MAIL_PASSWORD,
+  };
+  let message;
+  process.env.MAIL_HOST = 'smtp.provider.example';
+  process.env.MAIL_PORT = '465';
+  process.env.MAIL_USERNAME = 'info@halalwealth.finance';
+  process.env.MAIL_PASSWORD = 'test-only-password';
+
+  try {
+    const service = createWebinarEmailService({
+      createTransporter: () => ({
+        sendMail: async options => {
+          message = options;
+          return { accepted: [options.to], messageId: '<test-feedback-msg-id@halalwealth.finance>' };
+        },
+      }),
+    });
+    const result = await service.sendFeedbackEmail('feedback-user@example.com', 'Sister Aisha');
+    assert.equal(result.accepted[0], 'feedback-user@example.com');
+  } finally {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
+  assert.equal(message.to, 'feedback-user@example.com');
+  assert.equal(message.subject, DEFAULT_FEEDBACK_EMAIL_SUBJECT);
+  assert.match(message.text, /Kindly submit this feedback form/);
+  assert.match(message.html, /href="https:\/\/forms\.gle\/ysMqbTQ37BSnrbGT9"/);
+});
+test('builds the custom email with custom subject, message body, and HTML escaping', () => {
+  const email = buildCustomEmail({
+    subject: 'Special Webinar Update <Test>',
+    message: 'Dear Brother,\n\nHere is the updated information.\n\nThank you.',
+    recipientName: 'Brother Ahmed <Test>',
+  });
+
+  assert.equal(email.subject, 'Special Webinar Update <Test>');
+  assert.equal(email.text, 'Dear Brother,\n\nHere is the updated information.\n\nThank you.');
+  assert.match(email.html, /Special Webinar Update &lt;Test&gt;/);
+  assert.ok(email.html.includes('<p style="margin:0 0 16px;">Dear Brother,</p>'));
+  assert.ok(email.html.includes('<p style="margin:0 0 16px;">Here is the updated information.</p>'));
+});
+
+test('sends custom individual email using mock transporter without real network/SMTP', async () => {
+  const originalEnvironment = {
+    MAIL_HOST: process.env.MAIL_HOST,
+    MAIL_PORT: process.env.MAIL_PORT,
+    MAIL_USERNAME: process.env.MAIL_USERNAME,
+    MAIL_PASSWORD: process.env.MAIL_PASSWORD,
+  };
+
+  let message;
+  process.env.MAIL_HOST = 'smtp.hostinger.com';
+  process.env.MAIL_PORT = '465';
+  process.env.MAIL_USERNAME = 'info@halalwealth.finance';
+  process.env.MAIL_PASSWORD = 'test-only-password';
+
+  try {
+    const service = createWebinarEmailService({
+      createTransporter: () => ({
+        sendMail: async options => {
+          message = options;
+          return { accepted: [options.to], messageId: '<test-custom-msg-id@halalwealth.finance>' };
+        },
+      }),
+    });
+    const result = await service.sendCustomEmail('participant@example.com', {
+      subject: 'Custom Subject Line',
+      message: 'Hello participant,\n\nThis is a manual update.',
+      recipientName: 'Sister Maryam',
+    });
+    assert.equal(result.accepted[0], 'participant@example.com');
+  } finally {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
+  assert.equal(message.to, 'participant@example.com');
+  assert.equal(message.subject, 'Custom Subject Line');
+  assert.match(message.text, /This is a manual update/);
+  assert.match(message.html, /Custom Subject Line/);
 });

@@ -1,8 +1,66 @@
 const { once } = require('node:events');
 const mongoose = require('mongoose');
 const WebinarRegistration = require('../models/WebinarRegistration');
+const Webinar = require('../models/Webinar');
+
+function buildWebinarScope(webinarId) {
+  if (!webinarId || webinarId === 'all') return {};
+  const clean = String(webinarId).trim().toLowerCase();
+  if (clean === 'halal-wealth-nov-2026' || clean.includes('november') || clean === 'nov1') {
+    return {
+      $or: [
+        { webinarId: 'halal-wealth-nov-2026' },
+        { webinarVersion: 'November 1, 2026 Webinar' },
+      ],
+    };
+  }
+  if (clean === 'halal-wealth-oct-2026' || clean.includes('october') || clean === 'previous') {
+    return {
+      $or: [
+        { webinarId: 'halal-wealth-oct-2026' },
+        { webinarVersion: 'October 2026 Webinar' },
+        { webinarId: { $in: [null, undefined, ''] }, webinarVersion: { $nin: ['November 1, 2026 Webinar', 'Business Webinar 2026'] } },
+      ],
+    };
+  }
+  if (clean === 'business-webinar-2026' || clean.includes('business')) {
+    return {
+      $or: [
+        { webinarId: 'business-webinar-2026' },
+        { webinarVersion: 'Business Webinar 2026' },
+      ],
+    };
+  }
+  return { webinarId: clean };
+}
+
+function getWebinarTargetFilter(req = {}) {
+  const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+  return buildWebinarScope(targetWebinar);
+}
+
+function filterRegistrationsByWebinar(registrations = [], targetWebinar) {
+  if (!targetWebinar || targetWebinar === 'all') return registrations;
+  const clean = String(targetWebinar).trim().toLowerCase();
+  return registrations.filter(reg => {
+    const regWid = String(reg.webinarId || '').trim().toLowerCase();
+    const regVer = String(reg.webinarVersion || '').trim().toLowerCase();
+    if (clean === 'halal-wealth-nov-2026' || clean.includes('november') || clean === 'nov1') {
+      return regWid === 'halal-wealth-nov-2026' || regVer.includes('november');
+    }
+    if (clean === 'halal-wealth-oct-2026' || clean.includes('october') || clean === 'previous') {
+      return regWid === 'halal-wealth-oct-2026' || regVer.includes('october') || (!regVer.includes('november') && !regVer.includes('business'));
+    }
+    if (clean === 'business-webinar-2026' || clean.includes('business')) {
+      return regWid === 'business-webinar-2026' || regVer.includes('business');
+    }
+    return regWid === clean;
+  });
+}
+const CampaignConfig = require('../models/CampaignConfig');
 const webinarEmailService = require('../services/webinarEmailService');
 
+const FEEDBACK_CAMPAIGN_KEY = 'post_webinar_feedback';
 const REGISTRATION_STATUSES = ['Registered', 'Confirmed', 'Attended', 'Cancelled'];
 const PAGE_SIZES = [10, 25, 50];
 
@@ -31,6 +89,26 @@ function buildRegistrationFilter(query = {}) {
   if (query.status) {
     if (!REGISTRATION_STATUSES.includes(query.status)) throw new Error('Invalid registration status.');
     filter.status = query.status === 'Registered' ? { $in: ['Registered', 'New', null] } : query.status;
+  }
+
+  if (query.webinarId && query.webinarId !== 'all') {
+    const wid = String(query.webinarId).trim().toLowerCase();
+    if (wid === 'halal-wealth-nov-2026' || wid.includes('november') || wid === 'nov1') {
+      filter.webinarId = 'halal-wealth-nov-2026';
+    } else if (wid === 'halal-wealth-oct-2026' || wid.includes('october') || wid === 'previous') {
+      filter.webinarId = 'halal-wealth-oct-2026';
+    } else {
+      filter.webinarId = wid;
+    }
+  } else if (query.edition || query.webinarVersion) {
+    const edition = String(query.edition || query.webinarVersion).trim().toLowerCase();
+    if (edition.includes('november') || edition === 'nov1') {
+      filter.webinarVersion = 'November 1, 2026 Webinar';
+    } else if (edition.includes('business')) {
+      filter.webinarVersion = 'Business Webinar 2026';
+    } else if (edition.includes('october') || edition === 'previous') {
+      filter.webinarVersion = { $nin: ['November 1, 2026 Webinar', 'Business Webinar 2026'] };
+    }
   }
 
   const from = parseDate(String(query.from || ''));
@@ -68,6 +146,12 @@ function normalizeJoiningStatus(registration = {}) {
   return 'Not Sent';
 }
 
+function normalizeFeedbackStatus(registration = {}) {
+  if (registration.feedbackEmailSent === true) return 'Sent';
+  if (registration.feedbackEmailLastError) return 'Failed';
+  return 'Not Sent';
+}
+
 function normalizeEmailTracking(registration = {}) {
   const normalized = { ...registration };
   if (normalized._id && typeof normalized._id === 'object') {
@@ -81,6 +165,26 @@ function normalizeEmailTracking(registration = {}) {
     if (normalized.createdAt.date) normalized.createdAt = new Date(normalized.createdAt.date);
     else if (normalized.createdAt.$date) normalized.createdAt = new Date(normalized.createdAt.$date);
   }
+  normalized.companyName = normalized.companyName || '';
+  normalized.businessWebsite = normalized.businessWebsite || '';
+  normalized.country = normalized.country || '';
+  normalized.city = normalized.city || '';
+  normalized.additionalInfo = normalized.additionalInfo || normalized.financialChallenge || '';
+  normalized.state = normalized.state || '';
+  normalized.ageGroup = normalized.ageGroup || '';
+  normalized.otherAgeGroup = normalized.otherAgeGroup || '';
+  normalized.occupation = normalized.occupation || normalized.designation || '';
+  normalized.otherOccupation = normalized.otherOccupation || '';
+  normalized.otherWebinarSource = normalized.otherWebinarSource || '';
+  normalized.questionsOrTopics = normalized.questionsOrTopics || normalized.additionalInfo || normalized.financialChallenge || '';
+  normalized.state = normalized.state || '';
+  normalized.ageGroup = normalized.ageGroup || '';
+  normalized.otherAgeGroup = normalized.otherAgeGroup || '';
+  normalized.occupation = normalized.occupation || normalized.designation || '';
+  normalized.otherOccupation = normalized.otherOccupation || '';
+  normalized.otherWebinarSource = normalized.otherWebinarSource || '';
+  normalized.questionsOrTopics = normalized.questionsOrTopics || normalized.additionalInfo || normalized.financialChallenge || '';
+  normalized.webinarVersion = normalized.webinarVersion || 'October 2026 Webinar';
   normalized.confirmationEmailSent = normalized.confirmationEmailSent === true;
   normalized.confirmationEmailSentAt = normalized.confirmationEmailSentAt || null;
   normalized.confirmationEmailLastError = normalized.confirmationEmailLastError || null;
@@ -93,9 +197,13 @@ function normalizeEmailTracking(registration = {}) {
   normalized.reminderEmailSent = normalized.reminderEmailSent === true;
   normalized.reminderEmailSentAt = normalized.reminderEmailSentAt || null;
   normalized.reminderEmailLastError = normalized.reminderEmailLastError || null;
+  normalized.feedbackEmailSent = normalized.feedbackEmailSent === true;
+  normalized.feedbackEmailSentAt = normalized.feedbackEmailSentAt || null;
+  normalized.feedbackEmailLastError = normalized.feedbackEmailLastError || null;
   normalized.emailStatus = normalizeEmailStatus(normalized);
   normalized.announcementEmailStatus = normalizeAnnouncementStatus(normalized);
   normalized.joiningEmailStatus = normalizeJoiningStatus(normalized);
+  normalized.feedbackEmailStatus = normalizeFeedbackStatus(normalized);
   return normalized;
 }
 
@@ -112,7 +220,13 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function createAdminRegistrationController({ registrationModel = WebinarRegistration, logger = console, emailService = webinarEmailService } = {}) {
+function createAdminRegistrationController({
+  registrationModel = WebinarRegistration,
+  logger = console,
+  emailService = webinarEmailService,
+  campaignConfigModel = CampaignConfig,
+  webinarModel = Webinar,
+} = {}) {
   const safeLogger = {
     ...console,
     ...logger,
@@ -223,6 +337,27 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
       today.setUTCHours(0, 0, 0, 0);
       const effectiveStatus = { $ifNull: ['$status', 'Registered'] };
       const normalizedStatus = { $cond: [{ $eq: [effectiveStatus, 'New'] }, 'Registered', effectiveStatus] };
+
+      const webinarScope = {};
+      if (req.query.webinarId && req.query.webinarId !== 'all') {
+        const wid = String(req.query.webinarId).trim().toLowerCase();
+        if (wid === 'halal-wealth-nov-2026' || wid.includes('november') || wid === 'nov1') {
+          webinarScope.webinarId = 'halal-wealth-nov-2026';
+        } else if (wid === 'halal-wealth-oct-2026' || wid.includes('october') || wid === 'previous') {
+          webinarScope.webinarId = 'halal-wealth-oct-2026';
+        } else {
+          webinarScope.webinarId = wid;
+        }
+      } else if (req.query.edition || req.query.webinarVersion) {
+        const edition = String(req.query.edition || req.query.webinarVersion).trim().toLowerCase();
+        if (edition.includes('november') || edition === 'nov1') {
+          webinarScope.webinarVersion = 'November 1, 2026 Webinar';
+        } else if (edition.includes('october') || edition === 'previous') {
+          webinarScope.webinarVersion = { $nin: ['November 1, 2026 Webinar', 'Business Webinar 2026'] };
+        }
+      }
+
+      const summaryMatch = Object.keys(webinarScope).length > 0 ? [{ $match: webinarScope }] : [];
       const [result = {}] = await registrationModel.aggregate([
         {
           $facet: {
@@ -234,7 +369,9 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
               { $addFields: { status: normalizedStatus } },
             ],
             filteredTotal: [{ $match: filter }, { $count: 'count' }],
-            summary: [{
+            summary: [
+              ...summaryMatch,
+              {
               $group: {
                 _id: null,
                 total: { $sum: 1 },
@@ -373,6 +510,28 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     return normalizeEmailTracking(normalizeStatus(mergedRegistration));
   }
 
+  async function markFeedbackResult(registrationId, { success, errorMessage, email, fullName }) {
+    const update = success
+      ? { feedbackEmailSent: true, feedbackEmailSentAt: new Date(), feedbackEmailLastError: null }
+      : { feedbackEmailSent: false, feedbackEmailLastError: String(errorMessage || 'Feedback email delivery failed.').slice(0, 500) };
+
+    const updatedRegistration = await updateRegistrationRecord(registrationId, update, { email, fullName });
+
+    if (!updatedRegistration) return null;
+    const plainRecord = typeof updatedRegistration.toObject === 'function'
+      ? updatedRegistration.toObject()
+      : updatedRegistration;
+    const rawId = String(registrationId && typeof registrationId === 'object' && registrationId.oid ? registrationId.oid : registrationId);
+    const mergedRegistration = {
+      ...(plainRecord || {}),
+      _id: rawId,
+      email: email || plainRecord.email,
+      fullName: fullName || plainRecord.fullName,
+      ...update,
+    };
+    return normalizeEmailTracking(normalizeStatus(mergedRegistration));
+  }
+
   async function sendConfirmation(req, res) {
     if (!isValidId(req.params.id)) {
       return res.status(404).json({ message: 'Registration not found.' });
@@ -429,10 +588,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
 
   async function sendBulkConfirmations(req, res) {
     const sendToSent = req.body && req.body.includeSent === true;
-    const queryResult = await registrationModel.find();
-    const registrations = Array.isArray(queryResult)
+    const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+    const webinarFilter = getWebinarTargetFilter(req);
+    const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+    let registrations = Array.isArray(queryResult)
       ? queryResult
       : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+    registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
     const pendingRegistrations = (registrations || []).filter(registration => sendToSent || registration.confirmationEmailSent !== true);
     const summary = { total: registrations.length, sent: 0, failed: 0, skipped: Math.max(0, registrations.length - pendingRegistrations.length) };
     const failedEmails = [];
@@ -534,11 +696,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     const retryFailed = req.body && req.body.retryFailed === true;
     const includeSent = req.body && req.body.includeSent === true;
     const delayMs = Number.isFinite(Number(req.body?.delayMs)) ? Number(req.body.delayMs) : 250;
-
-    const queryResult = await registrationModel.find();
-    const registrations = Array.isArray(queryResult)
+    const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+    const webinarFilter = getWebinarTargetFilter(req);
+    const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+    let registrations = Array.isArray(queryResult)
       ? queryResult
       : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+    registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
 
     const pendingRegistrations = (registrations || []).filter(registration => {
       if (!registration?.email) return false;
@@ -655,10 +819,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     const includeSent = req.body && req.body.includeSent === true;
     const delayMs = Number.isFinite(Number(req.body?.delayMs)) ? Number(req.body.delayMs) : 250;
 
-    const queryResult = await registrationModel.find();
-    const registrations = Array.isArray(queryResult)
+    const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+    const webinarFilter = getWebinarTargetFilter(req);
+    const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+    let registrations = Array.isArray(queryResult)
       ? queryResult
       : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+    registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
 
     const validRegistrations = (registrations || []).filter(registration => Boolean(registration?.email));
 
@@ -709,10 +876,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
 
   async function getJoiningCampaignPreview(req, res) {
     try {
-      const queryResult = await registrationModel.find();
-      const registrations = Array.isArray(queryResult)
+      const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+      const webinarFilter = getWebinarTargetFilter(req);
+      const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+      let registrations = Array.isArray(queryResult)
         ? queryResult
         : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+      registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
 
       const total = registrations.length;
       const sent = registrations.filter(r => r.joiningEmailSent === true).length;
@@ -759,10 +929,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     const includeSent = req.body && req.body.includeSent === true;
 
     try {
-      const queryResult = await registrationModel.find();
-      const registrations = Array.isArray(queryResult)
+      const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+      const webinarFilter = getWebinarTargetFilter(req);
+      const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+      let registrations = Array.isArray(queryResult)
         ? queryResult
         : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+      registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
 
       // Validate emails and deduplicate identical emails
       const seenEmails = new Set();
@@ -845,6 +1018,386 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     return sendBulkOneHourReminders(req, res);
   }
 
+  let isFeedbackCampaignRunning = false;
+
+  async function getActiveFeedbackConfig() {
+    let config = null;
+    if (typeof campaignConfigModel?.findOne === 'function') {
+      try {
+        config = await campaignConfigModel.findOne({ campaignKey: FEEDBACK_CAMPAIGN_KEY }).lean();
+      } catch (_) {}
+    }
+    return {
+      campaignKey: FEEDBACK_CAMPAIGN_KEY,
+      name: 'Post-Webinar Feedback Campaign',
+      subject: config?.subject || webinarEmailService.DEFAULT_FEEDBACK_EMAIL_SUBJECT,
+      bodyText: config?.bodyText || webinarEmailService.DEFAULT_FEEDBACK_BODY_TEXT,
+      feedbackFormUrl: config?.feedbackFormUrl || webinarEmailService.DEFAULT_FEEDBACK_FORM_URL,
+      whatsappUrl: config?.whatsappUrl || webinarEmailService.DEFAULT_FEEDBACK_WHATSAPP_URL,
+      youtubeUrl: config?.youtubeUrl || webinarEmailService.DEFAULT_FEEDBACK_YOUTUBE_URL,
+      instagramUrl: config?.instagramUrl || webinarEmailService.DEFAULT_FEEDBACK_INSTAGRAM_URL,
+      updatedAt: config?.updatedAt || null,
+      updatedBy: config?.updatedBy || null,
+    };
+  }
+
+  async function getFeedbackCampaignPreview(req, res) {
+    try {
+      const config = await getActiveFeedbackConfig();
+      const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+      const webinarFilter = getWebinarTargetFilter(req);
+      const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+      let registrations = Array.isArray(queryResult)
+        ? queryResult
+        : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+      registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
+
+      const seenEmails = new Set();
+      let total = registrations.length;
+      let valid = 0;
+      let sent = 0;
+      let pending = 0;
+      let failed = 0;
+      let duplicates = 0;
+      let invalid = 0;
+
+      for (const reg of registrations) {
+        const rawEmail = String(reg?.email || '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) || rawEmail.length > 254) {
+          invalid += 1;
+          continue;
+        }
+        const normalized = rawEmail.toLowerCase();
+        if (seenEmails.has(normalized)) {
+          duplicates += 1;
+          continue;
+        }
+        seenEmails.add(normalized);
+        valid += 1;
+
+        if (reg.feedbackEmailSent === true) {
+          sent += 1;
+        } else if (reg.feedbackEmailLastError) {
+          failed += 1;
+        } else {
+          pending += 1;
+        }
+      }
+
+      const emailContent = emailService.buildFeedbackEmail(config, 'Participant');
+
+      return res.json({
+        config,
+        preview: {
+          subject: emailContent.subject,
+          text: emailContent.text,
+          html: emailContent.html,
+        },
+        recipients: {
+          total,
+          valid,
+          sent,
+          pending,
+          failed,
+          duplicates,
+          invalid,
+          eligibleToSend: pending + failed,
+        },
+      });
+    } catch (err) {
+      safeLogger.error('Failed to get feedback campaign preview.', { code: err.code || 'ADMIN_FEEDBACK_PREVIEW_FAILED' });
+      return res.status(500).json({ message: 'Feedback campaign preview could not be loaded.' });
+    }
+  }
+
+  async function updateFeedbackCampaignConfig(req, res) {
+    try {
+      const { subject, bodyText, feedbackFormUrl, whatsappUrl, youtubeUrl, instagramUrl } = req.body || {};
+
+      if (!subject || typeof subject !== 'string' || !subject.trim()) {
+        return res.status(400).json({ message: 'Subject is required.' });
+      }
+      if (subject.length > 250) {
+        return res.status(400).json({ message: 'Subject must not exceed 250 characters.' });
+      }
+      if (!bodyText || typeof bodyText !== 'string' || !bodyText.trim()) {
+        return res.status(400).json({ message: 'Body text is required.' });
+      }
+      if (bodyText.length > 5000) {
+        return res.status(400).json({ message: 'Body text must not exceed 5000 characters.' });
+      }
+
+      function isValidHttpUrl(stringUrl) {
+        if (!stringUrl || typeof stringUrl !== 'string') return false;
+        try {
+          const parsed = new URL(stringUrl.trim());
+          return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        } catch (_) {
+          return false;
+        }
+      }
+
+      if (feedbackFormUrl && !isValidHttpUrl(feedbackFormUrl)) {
+        return res.status(400).json({ message: 'Invalid Feedback Form URL.' });
+      }
+      if (whatsappUrl && !isValidHttpUrl(whatsappUrl)) {
+        return res.status(400).json({ message: 'Invalid WhatsApp Community URL.' });
+      }
+      if (youtubeUrl && !isValidHttpUrl(youtubeUrl)) {
+        return res.status(400).json({ message: 'Invalid YouTube URL.' });
+      }
+      if (instagramUrl && !isValidHttpUrl(instagramUrl)) {
+        return res.status(400).json({ message: 'Invalid Instagram URL.' });
+      }
+
+      const dangerousPattern = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>|javascript:|onerror=|onload=|onclick=/i;
+      if (dangerousPattern.test(subject) || dangerousPattern.test(bodyText)) {
+        return res.status(400).json({ message: 'Unsafe script characters detected.' });
+      }
+
+      const updateData = {
+        subject: subject.trim(),
+        bodyText: bodyText.trim(),
+        ...(feedbackFormUrl ? { feedbackFormUrl: feedbackFormUrl.trim() } : {}),
+        ...(whatsappUrl ? { whatsappUrl: whatsappUrl.trim() } : {}),
+        ...(youtubeUrl ? { youtubeUrl: youtubeUrl.trim() } : {}),
+        ...(instagramUrl ? { instagramUrl: instagramUrl.trim() } : {}),
+        updatedBy: req.user?.email || 'admin',
+      };
+
+      let updated;
+      if (typeof campaignConfigModel?.findOneAndUpdate === 'function') {
+        updated = await campaignConfigModel.findOneAndUpdate(
+          { campaignKey: FEEDBACK_CAMPAIGN_KEY },
+          { $set: updateData },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+      } else {
+        updated = updateData;
+      }
+
+      return res.json({
+        message: 'Feedback campaign configuration updated successfully.',
+        config: updated,
+      });
+    } catch (err) {
+      safeLogger.error('Failed to update feedback campaign configuration.', { code: err.code || 'ADMIN_FEEDBACK_CONFIG_FAILED' });
+      return res.status(500).json({ message: 'Campaign configuration could not be saved.' });
+    }
+  }
+
+  async function sendBulkFeedbackEmails(req, res) {
+    if (!req.body || req.body.confirmed !== true) {
+      return res.status(400).json({ message: 'Confirmation is required before sending the feedback campaign to registered participants.' });
+    }
+
+    if (isFeedbackCampaignRunning) {
+      return res.status(409).json({ message: 'A feedback email campaign is already in progress. Please wait for it to complete.' });
+    }
+
+    isFeedbackCampaignRunning = true;
+    const delayMs = Number.isFinite(Number(req.body?.delayMs)) ? Math.max(0, Number(req.body.delayMs)) : 250;
+    const includeSent = req.body && req.body.includeSent === true;
+
+    try {
+      const config = await getActiveFeedbackConfig();
+      const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+      const webinarFilter = getWebinarTargetFilter(req);
+      const queryResult = await (typeof registrationModel.find === 'function' ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find()) : []);
+      let registrations = Array.isArray(queryResult)
+        ? queryResult
+        : maybeLean(queryResult && typeof queryResult.sort === 'function' ? queryResult.sort({ createdAt: -1 }) : queryResult) || [];
+      registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
+
+      // Validate emails and deduplicate identical emails
+      const seenEmails = new Set();
+      const eligibleRegistrations = [];
+
+      for (const reg of registrations) {
+        const rawEmail = String(reg?.email || '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) || rawEmail.length > 254) {
+          continue;
+        }
+        const normalized = rawEmail.toLowerCase();
+        if (seenEmails.has(normalized)) {
+          continue;
+        }
+        seenEmails.add(normalized);
+
+        if (!includeSent && reg.feedbackEmailSent === true) {
+          continue;
+        }
+
+        eligibleRegistrations.push(reg);
+      }
+
+      const summary = {
+        total: registrations.length,
+        eligible: eligibleRegistrations.length,
+        sent: 0,
+        failed: 0,
+        skipped: Math.max(0, registrations.length - eligibleRegistrations.length),
+      };
+      const failedEmails = [];
+      const sentEmails = [];
+
+      for (const [index, registration] of eligibleRegistrations.entries()) {
+        const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid)
+          ? String(registration._id.oid)
+          : registration._id;
+        try {
+          await emailService.sendFeedbackEmail(registration.email, registration.fullName, config);
+          await markFeedbackResult(regId, { success: true, email: registration.email, fullName: registration.fullName });
+          summary.sent += 1;
+          sentEmails.push(registration.email);
+        } catch (error) {
+          const errMsg = error.message || 'Feedback email delivery failed.';
+          await markFeedbackResult(regId, { success: false, errorMessage: errMsg, email: registration.email, fullName: registration.fullName });
+          summary.failed += 1;
+          failedEmails.push({ email: registration.email, error: errMsg });
+          safeLogger.error('Bulk feedback email send failed.', {
+            code: error.code || 'ADMIN_FEEDBACK_BATCH_FAILED',
+            email: registration.email,
+            registrationId: regId,
+          });
+        }
+
+        if (index < eligibleRegistrations.length - 1 && delayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      }
+
+      const hasFailures = summary.failed > 0;
+      return res.json({
+        success: !hasFailures,
+        message: hasFailures
+          ? `Feedback email campaign completed with ${summary.sent} sent and ${summary.failed} failed.`
+          : `Feedback email campaign sent successfully to ${summary.sent} registered participants.`,
+        summary,
+        failedEmails,
+        sentEmails,
+      });
+    } catch (err) {
+      safeLogger.error('Bulk feedback email campaign failed.', { code: err.code || 'ADMIN_FEEDBACK_CAMPAIGN_FAILED' });
+      return res.status(500).json({ message: 'Feedback email campaign could not be completed.' });
+    } finally {
+      isFeedbackCampaignRunning = false;
+    }
+  }
+
+  async function resendBulkFeedbackEmails(req, res) {
+    req.body = { ...(req.body || {}), includeSent: true, confirmed: true };
+    return sendBulkFeedbackEmails(req, res);
+  }
+
+  async function sendSingleFeedbackEmail(req, res) {
+    if (!isValidId(req.params.id)) {
+      return res.status(404).json({ message: 'Registration not found.' });
+    }
+    try {
+      const registration = await findRegistrationRecord(req.params.id);
+      if (!registration) {
+        return res.status(404).json({ message: 'Registration not found.' });
+      }
+      const config = await getActiveFeedbackConfig();
+      const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid)
+        ? String(registration._id.oid)
+        : (registration._id || req.params.id);
+
+      await emailService.sendFeedbackEmail(registration.email, registration.fullName, config);
+      const updated = await markFeedbackResult(regId, {
+        success: true,
+        email: registration.email,
+        fullName: registration.fullName,
+      });
+      return res.json({
+        message: `Feedback email sent to ${registration.email}.`,
+        registration: updated,
+      });
+    } catch (err) {
+      safeLogger.error('Single feedback email send failed.', {
+        code: err.code || 'FEEDBACK_SINGLE_SEND_FAILED',
+        id: req.params.id,
+      });
+      await markFeedbackResult(req.params.id, {
+        success: false,
+        errorMessage: err.message,
+      });
+      return res.status(500).json({ message: 'Feedback email could not be sent.' });
+    }
+  }
+
+  
+  async function sendIndividualEmail(req, res) {
+    if (!isValidId(req.params.id)) {
+      return res.status(404).json({ success: false, message: 'Registration not found.' });
+    }
+
+    const { subject, message } = req.body || {};
+    const cleanSubject = typeof subject === 'string' ? subject.trim() : '';
+    const cleanMessage = typeof message === 'string' ? message.trim() : '';
+
+    if (!cleanSubject) {
+      return res.status(400).json({ success: false, message: 'Email subject is required.' });
+    }
+    if (cleanSubject.length > 300) {
+      return res.status(400).json({ success: false, message: 'Email subject cannot exceed 300 characters.' });
+    }
+    if (!cleanMessage) {
+      return res.status(400).json({ success: false, message: 'Email message is required.' });
+    }
+    if (cleanMessage.length > 10000) {
+      return res.status(400).json({ success: false, message: 'Email message cannot exceed 10,000 characters.' });
+    }
+
+    try {
+      const registration = await findRegistrationRecord(req.params.id);
+      if (!registration) {
+        return res.status(404).json({ success: false, message: 'Registration not found.' });
+      }
+      if (!registration.email || !String(registration.email).includes('@')) {
+        return res.status(400).json({ success: false, message: 'This registration does not have a valid email address.' });
+      }
+
+      await emailService.sendCustomEmail(registration.email, {
+        subject: cleanSubject,
+        message: cleanMessage,
+        recipientName: registration.fullName,
+      });
+
+      const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid)
+        ? String(registration._id.oid)
+        : (registration._id || req.params.id);
+
+      safeLogger.info('Admin individual email sent successfully.', {
+        registrationId: regId,
+        email: registration.email,
+        subject: cleanSubject,
+      });
+
+      return res.json({
+        success: true,
+        message: `Email sent successfully to ${registration.email}.`,
+        data: {
+          registrationId: regId,
+          email: registration.email,
+          fullName: registration.fullName,
+        },
+      });
+    } catch (error) {
+      safeLogger.error('Admin individual email send failed.', {
+        code: error.code || 'ADMIN_INDIVIDUAL_EMAIL_FAILED',
+        message: error.message,
+        id: req.params.id,
+      });
+
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to send email. Please check SMTP configuration and try again.',
+      });
+    }
+  }
+
   async function updateStatus(req, res) {
     const { status } = req.body || {};
     if (!REGISTRATION_STATUSES.includes(status)) {
@@ -891,7 +1444,67 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     }
   }
 
+  async function getWebinars(req, res) {
+    try {
+      let webinars = [];
+      if (typeof webinarModel?.find === 'function') {
+        webinars = await webinarModel.find().sort({ dateIso: -1, createdAt: -1 }).lean();
+      }
+      if (!webinars || webinars.length === 0) {
+        webinars = [
+          {
+            webinarId: 'halal-wealth-nov-2026',
+            title: 'Halal Wealth Webinar',
+            topic: 'Halal Trade, Investments & Generational Wealth',
+            date: 'Sunday, November 1, 2026',
+            time: '11:00 AM IST | 1:30 PM SGT | 9:30 AM GST | 8:30 AM AST',
+            status: 'Upcoming',
+            isCurrent: true,
+            isRegistrationClosed: false,
+          },
+          {
+            webinarId: 'halal-wealth-oct-2026',
+            title: 'Halal Wealth Webinar',
+            topic: 'Halal Trade, Investments & Generational Wealth',
+            date: 'Sunday, October 18, 2026',
+            time: '11:00 AM IST | 1:30 PM SGT | 9:30 AM GST | 8:30 AM AST',
+            status: 'Completed',
+            isCurrent: false,
+            isRegistrationClosed: true,
+          },
+        ];
+      }
+
+      const webinarsWithCounts = await Promise.all(
+        webinars.map(async (webinar) => {
+          let count = 0;
+          try {
+            if (typeof registrationModel.countDocuments === 'function') {
+              count = await registrationModel.countDocuments({
+                $or: [
+                  { webinarId: webinar.webinarId },
+                  ...(webinar.webinarId === 'halal-wealth-nov-2026' ? [{ webinarVersion: 'November 1, 2026 Webinar' }] : []),
+                  ...(webinar.webinarId === 'halal-wealth-oct-2026' ? [{ webinarVersion: 'October 2026 Webinar' }] : []),
+                ],
+              });
+            }
+          } catch (_) {}
+          return {
+            ...webinar,
+            participantCount: count,
+          };
+        })
+      );
+
+      return res.json({ success: true, data: webinarsWithCounts });
+    } catch (error) {
+      safeLogger.error('Admin get webinars failed.', { code: error.code || 'ADMIN_GET_WEBINARS_FAILED' });
+      return res.status(500).json({ success: false, message: 'Webinars could not be loaded.' });
+    }
+  }
+
   return {
+    getWebinars,
     list,
     getById,
     sendConfirmation,
@@ -906,6 +1519,13 @@ function createAdminRegistrationController({ registrationModel = WebinarRegistra
     sendBulkOneHourReminders,
     resendBulkOneHourReminders,
     getJoiningCampaignPreview,
+    getFeedbackCampaignPreview,
+    updateFeedbackCampaignConfig,
+    sendBulkFeedbackEmails,
+    resendBulkFeedbackEmails,
+    sendSingleFeedbackEmail,
+    sendIndividualEmail,
+    markFeedbackResult,
     updateStatus,
     exportCsv,
   };

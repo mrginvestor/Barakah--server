@@ -29,12 +29,14 @@ test('protects every registration read and check-in route at the HTTP boundary',
       '/api/admin/session',
       '/api/admin/registrations',
       '/api/admin/registrations/send-starting-reminder',
+      '/api/admin/campaigns/feedback/preview',
+      '/api/admin/campaigns/feedback/send',
       '/api/registrations',
       '/api/webinar/registrations',
       '/api/check-in',
     ];
     for (const path of paths) {
-      const response = await fetch(`${baseUrl}${path}`, { method: path === '/api/check-in' || path.includes('/send-') ? 'POST' : 'GET' });
+      const response = await fetch(`${baseUrl}${path}`, { method: path === '/api/check-in' || path.includes('/send') ? 'POST' : 'GET' });
       assert.equal(response.status, 401, path);
     }
 

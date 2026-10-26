@@ -18,6 +18,7 @@ const loginRateLimit = rateLimit({
 router.post('/login', loginRateLimit, authController.login);
 router.use(requireAdmin);
 router.get('/session', authController.getSession);
+router.get('/webinars', registrationController.getWebinars);
 router.get('/registrations/export', registrationController.exportCsv);
 router.get('/registrations/joining-campaign', registrationController.getJoiningCampaignPreview);
 router.get('/registrations', registrationController.list);
@@ -33,6 +34,12 @@ router.post('/registrations/resend-joining-link', registrationController.resendB
 router.post('/registrations/:id/send-joining-link', registrationController.sendSingleZoomJoiningLink);
 router.post('/registrations/send-starting-reminder', registrationController.sendBulkOneHourReminders);
 router.post('/registrations/resend-starting-reminder', registrationController.resendBulkOneHourReminders);
+router.get('/campaigns/feedback/preview', registrationController.getFeedbackCampaignPreview);
+router.put('/campaigns/feedback/config', registrationController.updateFeedbackCampaignConfig);
+router.post('/campaigns/feedback/send', registrationController.sendBulkFeedbackEmails);
+router.post('/campaigns/feedback/resend', registrationController.resendBulkFeedbackEmails);
+router.post('/registrations/:id/send-feedback', registrationController.sendSingleFeedbackEmail);
+router.post('/registrations/:id/send-email', registrationController.sendIndividualEmail);
 router.put('/registrations/:id/status', registrationController.updateStatus);
 
 module.exports = router;

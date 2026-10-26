@@ -9,6 +9,26 @@ const EMAIL_SUBJECT = 'Thank You for Registering for Our Webinar';
 const POSTPONEMENT_EMAIL_SUBJECT = 'Important Update: Halal Wealth Webinar Postponed to 18 October 2026';
 const ZOOM_JOINING_EMAIL_SUBJECT = 'Your Zoom Joining Link – Halal Wealth Webinar | 18 October 2026';
 const REMINDER_ONE_HOUR_EMAIL_SUBJECT = 'Webinar Starting in One Hour | Halal Trade, Investments & Generational Wealth';
+const DEFAULT_FEEDBACK_EMAIL_SUBJECT = 'Thank You for Attending | Feedback & Future Halal Investing Programs';
+const DEFAULT_FEEDBACK_FORM_URL = 'https://forms.gle/ysMqbTQ37BSnrbGT9';
+const DEFAULT_FEEDBACK_WHATSAPP_URL = 'https://chat.whatsapp.com/I9d41QdjbOGA43kYph2noq';
+const DEFAULT_FEEDBACK_YOUTUBE_URL = 'https://youtube.com/@ethicalfinancebasithtamil';
+const DEFAULT_FEEDBACK_INSTAGRAM_URL = 'https://instagram.com/ethicalfinancebasith.tamil';
+const DEFAULT_FEEDBACK_BODY_TEXT = `Assalamu Alaikum Wr Wb,
+
+Hope you have joined our webinar yesterday and benefited from the knowledge shared.
+
+We would like to hear your feedback and suggestions to help us better plan our future programs.
+
+Kindly submit this feedback form: https://forms.gle/ysMqbTQ37BSnrbGT9
+
+We look forward to having you join our Halal Investing webinar planned for November 2026. Do stay connected with us. JazakAllah.
+
+WhatsApp Community: https://chat.whatsapp.com/I9d41QdjbOGA43kYph2noq
+
+YouTube: youtube.com/@ethicalfinancebasithtamil
+
+Instagram: instagram.com/ethicalfinancebasith.tamil`;
 const ZOOM_LINK = 'https://us06web.zoom.us/j/81487983324?pwd=iiWszjuBKKDHZ7SNibjY9aUkfFVEvS.1';
 const ZOOM_MEETING_ID = '814 8798 3324';
 const ZOOM_PASSCODE = '666991';
@@ -401,6 +421,150 @@ See you in a while, Insha'Allah!`;
   return { subject: REMINDER_ONE_HOUR_EMAIL_SUBJECT, text, html, safeName };
 }
 
+function buildFeedbackEmail(configOrName = {}, possibleName = '', posterAttachmentPath = null) {
+  let config = {};
+  let recipientName = '';
+  if (typeof configOrName === 'string') {
+    recipientName = configOrName;
+    if (typeof possibleName === 'object' && possibleName !== null) {
+      config = possibleName;
+    }
+  } else if (typeof configOrName === 'object' && configOrName !== null) {
+    config = configOrName;
+    recipientName = typeof possibleName === 'string' ? possibleName : '';
+  }
+
+  const subject = String(config.subject || DEFAULT_FEEDBACK_EMAIL_SUBJECT).trim();
+  const feedbackFormUrl = String(config.feedbackFormUrl || DEFAULT_FEEDBACK_FORM_URL).trim();
+  const whatsappUrl = String(config.whatsappUrl || DEFAULT_FEEDBACK_WHATSAPP_URL).trim();
+  const youtubeUrl = String(config.youtubeUrl || DEFAULT_FEEDBACK_YOUTUBE_URL).trim();
+  const instagramUrl = String(config.instagramUrl || DEFAULT_FEEDBACK_INSTAGRAM_URL).trim();
+  const safeName = escapeHtml(recipientName || 'there');
+  const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
+
+  const text = config.bodyText ? String(config.bodyText).trim() : DEFAULT_FEEDBACK_BODY_TEXT;
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(subject)}</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f5f7f8;color:#243746;font-family:Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f5f7f8;width:100%;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;max-width:620px;background-color:#ffffff;border:1px solid #dfe7eb;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(8,43,73,0.06);">
+            <tr>
+              <td style="padding:28px 32px 16px;background-color:#ffffff;border-bottom:1px solid #edf2f5;">
+                <p style="margin:0 0 8px;color:#b98a2a;font-size:12px;font-weight:700;letter-spacing:2px;line-height:1.4;">HALAL WEALTH WEBINAR</p>
+                <h1 style="margin:0;color:#0e2d3d;font-size:24px;line-height:1.3;font-weight:700;">Thank You for Attending</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 32px;color:#243746;font-size:15px;line-height:1.7;">
+                <p style="margin:0 0 16px;">Assalamu Alaikum Wr Wb,</p>
+                <p style="margin:0 0 16px;">Hope you have joined our webinar yesterday and benefited from the knowledge shared.</p>
+                <p style="margin:0 0 16px;">We would like to hear your feedback and suggestions to help us better plan our future programs.</p>
+
+                <div style="background-color:#082b49;color:#ffffff;padding:24px 20px;margin:24px 0;border-radius:10px;text-align:center;">
+                  <p style="margin:0 0 12px;font-size:16px;font-weight:700;color:#ffffff;">Kindly submit this feedback form:</p>
+                  <p style="margin:0 0 16px;">
+                    <a href="${escapeHtml(feedbackFormUrl)}" style="display:inline-block;background-color:#d4af5a;color:#082b49;font-weight:700;font-size:15px;padding:12px 24px;border-radius:6px;text-decoration:none;">Click Here to Submit Feedback</a>
+                  </p>
+                  <p style="margin:0;font-size:13px;color:#e6c875;word-break:break-all;">
+                    <a href="${escapeHtml(feedbackFormUrl)}" style="color:#e6c875;text-decoration:underline;">${escapeHtml(feedbackFormUrl)}</a>
+                  </p>
+                </div>
+
+                <p style="margin:0 0 20px;">We look forward to having you join our Halal Investing webinar planned for November 2026. Do stay connected with us. JazakAllah.</p>
+
+                <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Stay Connected With Us:</p>
+                  <p style="margin:0 0 10px;">
+                    <strong>WhatsApp Community:</strong><br />
+                    <a href="${escapeHtml(whatsappUrl)}" style="color:#0d5c7d;text-decoration:underline;">${escapeHtml(whatsappUrl)}</a>
+                  </p>
+                  <p style="margin:0 0 10px;">
+                    <strong>YouTube:</strong><br />
+                    <a href="${escapeHtml(youtubeUrl)}" style="color:#0d5c7d;text-decoration:underline;">youtube.com/@ethicalfinancebasithtamil</a>
+                  </p>
+                  <p style="margin:0;">
+                    <strong>Instagram:</strong><br />
+                    <a href="${escapeHtml(instagramUrl)}" style="color:#0d5c7d;text-decoration:underline;">instagram.com/ethicalfinancebasith.tamil</a>
+                  </p>
+                </div>
+
+                ${posterImage}
+
+                <p style="margin:20px 0 4px;">JazakAllahu Khairan,</p>
+                <p style="margin:0 0 2px;color:#0e2d3d;font-weight:700;">Barakah Team</p>
+                <p style="margin:0;color:#6b7c87;font-size:14px;">Halal Wealth Webinar</p>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;color:#6b7c87;font-size:12px;line-height:1.5;">Halal Wealth Webinar &bull; info@halalwealth.finance</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject, text, html, safeName };
+}
+
+
+function buildCustomEmail({ subject, message, recipientName, posterAttachmentPath = null }) {
+  const safeName = escapeHtml(recipientName || 'there');
+  const safeSubject = escapeHtml(String(subject || '').trim());
+  const textBody = String(message || '').trim();
+  const safeHtmlBody = escapeHtml(textBody)
+    .split(/\n\n+/)
+    .map(para => `<p style="margin:0 0 16px;">${para.replace(/\n/g, '<br />')}</p>`)
+    .join('');
+
+  const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${safeSubject}</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f5f7f8;color:#243746;font-family:Arial,Helvetica,sans-serif;-webkit-font-smoothing:antialiased;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f5f7f8;width:100%;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;max-width:620px;background-color:#ffffff;border:1px solid #dfe7eb;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(8,43,73,0.06);">
+            <tr>
+              <td style="padding:28px 32px 16px;background-color:#ffffff;border-bottom:1px solid #edf2f5;">
+                <p style="margin:0 0 8px;color:#b98a2a;font-size:12px;font-weight:700;letter-spacing:2px;line-height:1.4;">HALAL WEALTH WEBINAR</p>
+                <h1 style="margin:0;color:#0e2d3d;font-size:24px;line-height:1.3;font-weight:700;">${safeSubject}</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 32px;color:#243746;font-size:15px;line-height:1.7;">
+                ${safeHtmlBody}
+                ${posterImage}
+                <div style="margin-top:24px;padding-top:16px;border-top:1px solid #edf2f5;font-size:13px;color:#6b7c87;">
+                  <p style="margin:0 0 4px;">Halal Wealth Webinar</p>
+                  <p style="margin:0;"><a href="mailto:info@halalwealth.finance" style="color:#0d5c7d;text-decoration:none;">info@halalwealth.finance</a></p>
+                </div>
+              </td>
+            </tr>
+          </table>
+          <p style="margin:16px 0 0;color:#6b7c87;font-size:12px;line-height:1.5;">Halal Wealth Webinar &bull; info@halalwealth.finance</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject: String(subject || '').trim(), text: textBody, html, safeName };
+}
+
 function resolvePosterPath() {
   const candidatePaths = [
     path.resolve(__dirname, '..', '..', 'assets', 'webinar tamil.png'),
@@ -546,7 +710,18 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
     return sendMailForTemplate(recipientEmail, messageContent, 'webinar one-hour reminder');
   }
 
-  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder };
+  async function sendFeedbackEmail(recipientEmail, recipientName, campaignConfig = {}) {
+    const messageContent = buildFeedbackEmail(campaignConfig, recipientName, resolvePosterPath());
+    return sendMailForTemplate(recipientEmail, messageContent, 'webinar feedback email');
+  }
+
+  
+  async function sendCustomEmail(recipientEmail, { subject, message, recipientName }) {
+    const messageContent = buildCustomEmail({ subject, message, recipientName, posterAttachmentPath: resolvePosterPath() });
+    return sendMailForTemplate(recipientEmail, messageContent, 'individual participant email');
+  }
+
+  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder, sendFeedbackEmail, sendCustomEmail };
 }
 
 module.exports = {
@@ -554,6 +729,12 @@ module.exports = {
   POSTPONEMENT_EMAIL_SUBJECT,
   ZOOM_JOINING_EMAIL_SUBJECT,
   REMINDER_ONE_HOUR_EMAIL_SUBJECT,
+  DEFAULT_FEEDBACK_EMAIL_SUBJECT,
+  DEFAULT_FEEDBACK_FORM_URL,
+  DEFAULT_FEEDBACK_WHATSAPP_URL,
+  DEFAULT_FEEDBACK_YOUTUBE_URL,
+  DEFAULT_FEEDBACK_INSTAGRAM_URL,
+  DEFAULT_FEEDBACK_BODY_TEXT,
   ZOOM_LINK,
   ZOOM_MEETING_ID,
   ZOOM_PASSCODE,
@@ -562,6 +743,8 @@ module.exports = {
   buildPostponementAnnouncement,
   buildZoomJoiningDetails,
   buildOneHourReminder,
+  buildFeedbackEmail,
+  buildCustomEmail,
   createWebinarEmailService,
   ...createWebinarEmailService(),
 };

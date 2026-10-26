@@ -5,16 +5,34 @@ const webinarRegistrationSchema = new mongoose.Schema({
   whatsapp: { type: String, required: true, trim: true },
   email: { type: String, required: true, trim: true, lowercase: true },
   location: { type: String, default: '', trim: true },
+  country: { type: String, default: '', trim: true },
+  state: { type: String, default: '', trim: true },
+  city: { type: String, default: '', trim: true },
+  ageGroup: { type: String, default: '', trim: true },
+  otherAgeGroup: { type: String, default: '', trim: true },
   designation: { type: String, required: true, trim: true },
-  industry: { type: String, required: true, trim: true },
-  financialInterests: { type: [String], required: true, enum: ['Financial Planning', 'Loans and Financing', 'Investments and Wealth Management', 'Business Ethics', 'Others'], validate: {
-    validator: values => Array.isArray(values) && values.length >= 1,
-    message: 'Select at least one financial topic.',
-  } },
+  occupation: { type: String, default: '', trim: true },
+  otherOccupation: { type: String, default: '', trim: true },
+  industry: { type: String, default: '', trim: true },
+  companyName: { type: String, default: '', trim: true },
+  businessWebsite: { type: String, default: '', trim: true },
+  financialInterests: {
+    type: [String],
+    required: true,
+    validate: {
+      validator: values => Array.isArray(values) && values.length >= 1,
+      message: 'Select at least one financial topic.',
+    },
+  },
   otherFinancialInterest: { type: String, default: '', trim: true },
+  additionalInfo: { type: String, default: '', trim: true },
   financialChallenge: { type: String, default: '' },
-  webinarSource: { type: String, required: true, trim: true },
-  consent: { type: Boolean, required: true },
+  questionsOrTopics: { type: String, default: '', trim: true },
+  webinarSource: { type: String, default: 'Website', trim: true },
+  otherWebinarSource: { type: String, default: '', trim: true },
+  webinarId: { type: String, default: 'halal-wealth-nov-2026', trim: true },
+  webinarVersion: { type: String, default: 'November 1, 2026 Webinar', trim: true },
+  consent: { type: Boolean, default: true },
   status: { type: String, enum: ['New', 'Registered', 'Confirmed', 'Attended', 'Cancelled'], default: 'Registered' },
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
@@ -28,6 +46,9 @@ const webinarRegistrationSchema = new mongoose.Schema({
   reminderEmailSent: { type: Boolean, default: false },
   reminderEmailSentAt: { type: Date, default: null },
   reminderEmailLastError: { type: String, default: null },
+  feedbackEmailSent: { type: Boolean, default: false },
+  feedbackEmailSentAt: { type: Date, default: null },
+  feedbackEmailLastError: { type: String, default: null },
   registrationId: { type: String, default: null, trim: true },
 }, { timestamps: true });
 
@@ -35,5 +56,9 @@ webinarRegistrationSchema.index({ email: 1 });
 webinarRegistrationSchema.index({ createdAt: -1 });
 webinarRegistrationSchema.index({ status: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ registrationId: 1 });
+webinarRegistrationSchema.index({ feedbackEmailSent: 1 });
+webinarRegistrationSchema.index({ webinarVersion: 1, createdAt: -1 });
+webinarRegistrationSchema.index({ webinarId: 1, createdAt: -1 });
+webinarRegistrationSchema.index({ email: 1, webinarId: 1 });
 
 module.exports = mongoose.model('WebinarRegistration', webinarRegistrationSchema);

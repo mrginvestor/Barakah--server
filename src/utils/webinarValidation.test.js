@@ -208,3 +208,91 @@ test('rejects invalid mobile numbers', () => {
   }
 });
 
+test('accepts the new business webinar financial interest topics', () => {
+  const result = validateWebinarRegistration({
+    fullName: 'Bilal Ahmad',
+    whatsapp: '+919876543210',
+    email: 'bilal@venture.in',
+    occupation: 'Startup Founder',
+    industry: 'Technology, Software & IT',
+    companyName: 'Barakah Tech',
+    businessWebsite: 'https://barakahtech.io',
+    country: 'India',
+    city: 'Hyderabad',
+    financialInterests: ['Financial Planning', 'Halal Investments and Wealth Management', 'Business Growth and Trade', 'Business Ethics', 'Generational Wealth Planning', 'Other'],
+    otherFinancialInterest: 'Cross-border Halal venture capital syndication',
+    additionalInfo: 'Scaling seed round without interest-based convertible notes.',
+    consent: true,
+  });
+  assert.equal(result.isValid, true);
+  assert.deepEqual(result.errors, {});
+});
+
+
+test('rejects empty or whitespace-only inputs when Other is selected for occupation, ageGroup, interests, or source', () => {
+  const base = {
+    fullName: 'Sara Ali',
+    email: 'sara@example.com',
+    whatsapp: '+919876543210',
+    country: 'India',
+    occupation: 'Other',
+    otherOccupation: '   ',
+    ageGroup: 'Other',
+    otherAgeGroup: '',
+    financialInterests: ['Other'],
+    otherFinancialInterest: '\t\n ',
+    webinarSource: 'Other',
+    otherWebinarSource: '   ',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(base);
+  assert.equal(result.isValid, false);
+  assert.equal(result.errors.otherOccupation, 'Please specify your occupation.');
+  assert.equal(result.errors.otherAgeGroup, 'Please specify your age group.');
+  assert.equal(result.errors.otherFinancialInterest, 'Please specify your financial interest.');
+  assert.equal(result.errors.otherWebinarSource, 'Please specify how you heard about us.');
+});
+
+test('accepts valid conditional Other explanations when provided', () => {
+  const payload = {
+    fullName: 'Yusuf Khan',
+    email: 'yusuf@example.com',
+    whatsapp: '+971501234567',
+    country: 'United Arab Emirates',
+    state: 'Dubai',
+    city: 'Dubai',
+    occupation: 'Other',
+    otherOccupation: 'Freelance Architectural Consultant',
+    ageGroup: 'Other',
+    otherAgeGroup: '62 years',
+    financialInterests: ['Islamic Finance Principles', 'Other'],
+    otherFinancialInterest: 'Shariah-compliant real estate crowdfunding',
+    webinarSource: 'Other',
+    otherWebinarSource: 'Community Friday Khutbah announcement',
+    questionsOrTopics: 'How can small investors access Sukuk bonds?',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, true);
+  assert.deepEqual(result.errors, {});
+});
+
+test('does not require conditional Other fields when Other is not selected', () => {
+  const payload = {
+    fullName: 'Maryam Siddiqui',
+    email: 'maryam@example.com',
+    whatsapp: '+6561234567',
+    country: 'Singapore',
+    occupation: 'Homemaker',
+    ageGroup: '25–34',
+    financialInterests: ['Personal Financial Planning', 'Savings and Wealth Management'],
+    webinarSource: 'Social Media',
+    consent: true,
+  };
+
+  const result = validateWebinarRegistration(payload);
+  assert.equal(result.isValid, true);
+  assert.deepEqual(result.errors, {});
+});
