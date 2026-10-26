@@ -663,13 +663,31 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       throw error;
     }
 
-    const transporter = createTransporter({
+    const isPort465 = port === 465;
+    const isPort587 = port === 587;
+    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
+    const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    const connectionTimeout = Number(readFirstDefined(environment, ['SMTP_CONNECTION_TIMEOUT_MS']) || 10000);
+    const greetingTimeout = Number(readFirstDefined(environment, ['SMTP_GREETING_TIMEOUT_MS']) || 10000);
+    const socketTimeout = Number(readFirstDefined(environment, ['SMTP_SOCKET_TIMEOUT_MS']) || 15000);
+
+    const transportConfig = {
       host,
       port,
-      secure: useSecureSocket || port === 465,
-      requireTLS: !useSecureSocket && port !== 465,
+      secure,
+      requireTLS,
+      family: 4,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
+      connectionTimeout,
+      greetingTimeout,
+      socketTimeout,
       auth: { user: username, pass: password },
-    });
+    };
+
+    const transporter = getTransporter(transportConfig);
 
     const generatedMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@halalwealth.finance>`;
     const mailOptions = {
@@ -698,15 +716,19 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       });
       return info;
     } catch (error) {
+      const errorStatus = classifySmtpError(error);
       const safeMessage = sanitizeLogValue(error && (error.message || error.response || error.code || 'SMTP send failure'));
       logger.error(`${purpose} SMTP send failed`, {
-        status: classifySmtpError(error),
+        status: errorStatus,
         code: error.code || 'SMTP_SEND_FAILED',
         response: safeMessage,
         host,
         port,
-        secure: useSecureSocket || port === 465,
+        secure: transportConfig.secure,
       });
+      if (errorStatus === 'SMTP_TIMEOUT' || errorStatus === 'SMTP_CONNECTION_FAILED') {
+        resetTransporter();
+      }
       throw error;
     }
   }

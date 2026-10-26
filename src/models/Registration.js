@@ -25,7 +25,10 @@ const registrationSchema = new mongoose.Schema({
   otherReferralSource: { type: String, trim: true },
   organization: { type: String },
   jobTitle: { type: String },
-  status: { type: String, enum: ['Pending', 'Confirmed', 'Checked-In'], default: 'Confirmed' }
+  status: { type: String, enum: ['Pending', 'Confirmed', 'Checked-In'], default: 'Confirmed' },
+  confirmationEmailSent: { type: Boolean, default: false },
+  confirmationEmailSentAt: { type: Date, default: null },
+  confirmationEmailLastError: { type: String, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Registration', registrationSchema);

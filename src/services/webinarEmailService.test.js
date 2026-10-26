@@ -124,13 +124,16 @@ test('sends multipart confirmation from the fixed sender using backend SMTP sett
     }
   }
 
-  assert.deepEqual(transportConfig, {
-    host: 'smtp.provider.example',
-    port: 587,
-    secure: true,
-    requireTLS: false,
-    auth: { user: 'info@halalwealth.finance', pass: 'test-only-password' },
-  });
+  assert.equal(transportConfig.host, 'smtp.provider.example');
+  assert.equal(transportConfig.port, 587);
+  assert.equal(transportConfig.secure, false);
+  assert.equal(transportConfig.requireTLS, true);
+  assert.equal(transportConfig.family, 4);
+  assert.equal(transportConfig.pool, true);
+  assert.equal(transportConfig.connectionTimeout, 10000);
+  assert.equal(transportConfig.greetingTimeout, 10000);
+  assert.equal(transportConfig.socketTimeout, 15000);
+  assert.deepEqual(transportConfig.auth, { user: 'info@halalwealth.finance', pass: 'test-only-password' });
   assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
   assert.equal(message.replyTo, 'info@halalwealth.finance');
   assert.equal(message.to, 'test@example.com');
@@ -371,4 +374,39 @@ test('sends custom individual email using mock transporter without real network/
   assert.equal(message.subject, 'Custom Subject Line');
   assert.match(message.text, /This is a manual update/);
   assert.match(message.html, /Custom Subject Line/);
+});
+
+
+test('reuses the cached transporter instance across multiple email dispatches', async () => {
+  let createdCount = 0;
+  const originalEnvironment = {
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_PORT: process.env.SMTP_PORT,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASSWORD: process.env.SMTP_PASSWORD,
+  };
+  process.env.SMTP_HOST = 'smtp.cached.example';
+  process.env.SMTP_PORT = '465';
+  process.env.SMTP_USER = 'cached@example.com';
+  process.env.SMTP_PASSWORD = 'cached-password';
+
+  try {
+    const service = createWebinarEmailService({
+      createTransporter: () => {
+        createdCount++;
+        return { sendMail: async () => ({ accepted: ['recipient@example.com'] }) };
+      },
+    });
+
+    await service.sendRegistrationConfirmation('test1@example.com', 'User One');
+    await service.sendRegistrationConfirmation('test2@example.com', 'User Two');
+    await service.sendRegistrationConfirmation('test3@example.com', 'User Three');
+
+    assert.equal(createdCount, 1, 'Transporter should be created once and reused via cache');
+  } finally {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
