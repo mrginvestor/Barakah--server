@@ -825,4 +825,27 @@ test('sendIndividualEmail handles participant not found and SMTP failure safely'
   assert.equal(resError.statusCode, 500);
   assert.equal(resError.body.success, false);
   assert.match(resError.body.message, /SMTP connection timed out/);
+
+  // 3. Resend unverified domain handling
+  const domainError = new Error('The domain is not verified');
+  domainError.code = 'RESEND_DOMAIN_NOT_VERIFIED';
+  const controllerDomainError = createAdminRegistrationController({
+    registrationModel: {
+      findOne: async () => ({ _id: 'reg-999', email: 'fail@example.com', fullName: 'Fail User' }),
+    },
+    emailService: {
+      sendCustomEmail: async () => { throw domainError; },
+    },
+    logger: createLogger(),
+  });
+
+  const resDomainError = createResponse();
+  await controllerDomainError.sendIndividualEmail({
+    params: { id: 'reg-999' },
+    body: { subject: 'Test Subject', message: 'Test Message' },
+  }, resDomainError);
+
+  assert.equal(resDomainError.statusCode, 500);
+  assert.equal(resDomainError.body.success, false);
+  assert.match(resDomainError.body.message, /domain is not verified with Resend/i);
 });

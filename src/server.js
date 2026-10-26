@@ -13,51 +13,66 @@ function isPlaceholder(value) {
   return /^(REPLACE_|YOUR_|YOUR-|<)/i.test(s) || s === 'pass' || s === 'user';
 }
 
-async function verifySmtpConfiguration() {
+async function verifyEmailConfiguration() {
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (resendApiKey) {
+    if (isPlaceholder(resendApiKey)) {
+      console.warn('RESEND_API_KEY contains a placeholder value. Please set a valid Resend API key.');
+      return;
+    }
+    const fromAddress = process.env.RESEND_FROM || process.env.MAIL_FROM || 'info@halalwealth.finance';
+    console.log(`Email service configured with Resend HTTP API (sender: ${fromAddress})`);
+    return;
+  }
+
   const host = process.env.SMTP_HOST || process.env.MAIL_HOST;
-  const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || (process.env.SMTP_HOST?.includes('hostinger') ? 465 : 587));
-  const username = process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.MAIL_USERNAME || process.env.MAIL_USER;
-  const password = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.MAIL_PASS || process.env.MAIL_PASSWORD;
-  const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
-
-  if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-    console.warn('SMTP configuration is incomplete. Email delivery will remain disabled until real SMTP credentials are set.');
+  if (!host) {
+    console.warn('Email service: Neither RESEND_API_KEY nor SMTP credentials are set. Set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
     return;
   }
 
-  if (isPlaceholder(password) || isPlaceholder(username) || isPlaceholder(host)) {
-    console.warn(`SMTP configuration contains placeholder credentials (username: "${username}"). Skipping verification until real credentials are provided in .env.`);
-    return;
+  if (process.env.RENDER || process.env.NODE_ENV === 'production') {
+    console.warn(`[NOTICE] Render Free blocks outbound SMTP ports 25, 465, and 587. Email delivery to ${host} will stall unless RESEND_API_KEY is configured for HTTP API delivery.`);
   }
 
-  const isSecure = useSecureSocket || port === 465;
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: isSecure,
-    requireTLS: !isSecure && port !== 465,
-    auth: { user: username, pass: password },
-    family: 4,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
+  if (process.env.ENABLE_SMTP_STARTUP_VERIFY === 'true') {
+    const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || (host.includes('hostinger') ? 465 : 587));
+    const username = process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.MAIL_USERNAME || process.env.MAIL_USER;
+    const password = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.MAIL_PASS || process.env.MAIL_PASSWORD;
+    const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
 
-  try {
-    await transporter.verify();
-    console.log(`SMTP connected successfully to ${host}:${port} (${username})`);
-  } catch (error) {
-    console.warn('SMTP verification notice:', {
-      code: error.code || 'SMTP_VERIFY_FAILED',
+    if (!username || !password || !Number.isInteger(port) || port < 1 || isPlaceholder(password)) {
+      return;
+    }
+
+    const isSecure = useSecureSocket || port === 465;
+    const transporter = nodemailer.createTransport({
       host,
       port,
       secure: isSecure,
-      username,
-      message: error.message || 'Authentication failed',
+      requireTLS: !isSecure && port !== 465,
+      auth: { user: username, pass: password },
+      family: 4,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
+
+    try {
+      await transporter.verify();
+      console.log(`SMTP connected successfully to ${host}:${port} (${username})`);
+    } catch (error) {
+      console.warn('SMTP verification notice:', {
+        code: error.code || 'SMTP_VERIFY_FAILED',
+        host,
+        port,
+        secure: isSecure,
+        username,
+        message: error.message || 'Authentication failed',
+      });
+    }
   }
 }
-
 app.use(helmet());
 const parseOrigins = value => String(value || '')
   .split(',')
@@ -140,7 +155,7 @@ if (!process.env.MONGODB_URI) {
     verifyAdminAuthConfiguration();
     app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
     // Run SMTP verification asynchronously in background so HTTP server is immediately responsive
-    verifySmtpConfiguration().catch(err => {
+    verifyEmailConfiguration().catch(err => {
       console.warn('Background SMTP verification notice:', err?.message || err);
     });
   })

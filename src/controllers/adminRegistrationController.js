@@ -1391,11 +1391,21 @@ function createAdminRegistrationController({
         id: req.params.id,
       });
 
-      let userMessage = error.message || 'Failed to send email. Please check SMTP configuration and try again.';
-      if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT' || /timeout|timed out/i.test(error.message)) {
+      let userMessage = error.message || 'Failed to send email. Please check configuration and try again.';
+      if (error.code === 'RESEND_DOMAIN_NOT_VERIFIED' || /domain not verified|verify your domain/i.test(error.message)) {
+        userMessage = 'Email sending domain is not verified with Resend. Please verify DNS records for halalwealth.finance in the Resend dashboard or set RESEND_FROM to an authorized sender.';
+      } else if (error.code === 'RESEND_AUTH_FAILED' || /api key|unauthorized|forbidden/i.test(error.message)) {
+        userMessage = 'Resend API authentication failed. Please verify your RESEND_API_KEY environment variable.';
+      } else if (error.code === 'RESEND_RATE_LIMITED' || /rate limit/i.test(error.message)) {
+        userMessage = 'Email rate limit exceeded. Please wait a moment and try again.';
+      } else if (error.code === 'RESEND_KEY_MISSING' || /resend_api_key/i.test(error.message)) {
+        userMessage = 'Outbound SMTP is blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.';
+      } else if (/smtp connection timed out/i.test(error.message)) {
         userMessage = 'SMTP connection timed out. Hostinger SMTP server could not be reached within the timeout limit. Please verify network connectivity or try again.';
+      } else if (error.code === 'RESEND_NETWORK_TIMEOUT' || error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT' || /timeout|timed out/i.test(error.message)) {
+        userMessage = 'Email delivery timed out. Please check network connectivity and try again.';
       } else if (error.code === 'EAUTH' || /auth|authentication/i.test(error.message)) {
-        userMessage = 'SMTP authentication failed. Please check your Hostinger email username and password.';
+        userMessage = 'Email authentication failed. Please check your credentials.';
       }
 
       return res.status(500).json({

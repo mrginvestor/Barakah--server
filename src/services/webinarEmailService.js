@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+let Resend;
+try {
+  Resend = require('resend').Resend;
+} catch (_) {
+  Resend = null;
+}
 
 const SENDER_EMAIL = 'info@halalwealth.finance';
 const POSTER_CID = 'webinar-poster';
@@ -599,6 +605,49 @@ function classifySmtpError(error) {
   return 'SMTP_SEND_FAILED';
 }
 
+function classifyResendError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const name = String(error?.name || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  const statusCode = error?.statusCode || error?.status;
+
+  if (statusCode === 401 || statusCode === 403 || /api_key|api key|invalid api|unauthorized|forbidden|not authorized/i.test(message) || name.includes('auth')) {
+    return 'RESEND_AUTH_FAILED';
+  }
+  if (statusCode === 429 || /rate limit|too many requests|quota/i.test(message)) {
+    return 'RESEND_RATE_LIMITED';
+  }
+  if (statusCode === 422 || /domain|not verified|sender|onboarding@resend.dev/i.test(message) || name.includes('domain')) {
+    return 'RESEND_DOMAIN_NOT_VERIFIED';
+  }
+  if (/timeout|timed out|abort|econnreset|etimedout|fetch failed/i.test(message) || code === 'ETIMEDOUT') {
+    return 'RESEND_NETWORK_TIMEOUT';
+  }
+  return error?.code || 'RESEND_API_ERROR';
+}
+
+function createResendPosterAttachment(posterPath) {
+  if (!posterPath || !fs.existsSync(posterPath)) return [];
+  try {
+    const fileBuffer = fs.readFileSync(posterPath);
+    return [{
+      filename: 'webinar-poster.png',
+      content: fileBuffer.toString('base64'),
+      contentType: 'image/png',
+      contentId: POSTER_CID,
+      content_id: POSTER_CID,
+    }];
+  } catch (_) {
+    return [];
+  }
+}
+
+function isPlaceholderValue(value) {
+  if (!value) return true;
+  const trimmed = String(value).trim();
+  return /^(REPLACE_WITH|your_|placeholder|test-only)/i.test(trimmed);
+}
+
 function createPosterAttachment(posterPath) {
   if (!posterPath || !fs.existsSync(posterPath)) return [];
   return [{
@@ -610,7 +659,7 @@ function createPosterAttachment(posterPath) {
   }];
 }
 
-function createWebinarEmailService({ createTransporter = config => nodemailer.createTransport(config), logger = console } = {}) {
+function createWebinarEmailService({ resendClient = null, createTransporter = config => nodemailer.createTransport(config), logger = console } = {}) {
   let cachedTransporter = null;
   let cachedKey = null;
 
@@ -633,23 +682,15 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
   }
   async function sendMailForTemplate(recipientEmail, messageContent, purpose = 'webinar email') {
     const environment = process.env;
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const fromAddress = readFirstDefined(environment, ['MAIL_FROM', 'SMTP_FROM', 'EMAIL_FROM']) || SENDER_EMAIL;
-    const fromName = readFirstDefined(environment, ['MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
-    const replyToAddress = readFirstDefined(environment, ['MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']) || fromAddress;
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-    const posterPath = resolvePosterPath();
+    const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
+    const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
+    const useResend = Boolean(resendClient || hasValidResendKey);
 
-    logger.info(`${purpose} configuration check`, {
-      smtpConfigured: Boolean(host && username && password && Number.isInteger(port) && port > 0),
-      hostConfigured: Boolean(host),
-      usernameConfigured: Boolean(username),
-      fromAddressConfigured: Boolean(fromAddress),
-      fromName,
-    });
+    const fromAddress = readFirstDefined(environment, ['RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM', 'EMAIL_FROM']) || SENDER_EMAIL;
+    const fromName = readFirstDefined(environment, ['RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
+    const replyToAddress = readFirstDefined(environment, ['RESEND_REPLY_TO', 'MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']) || fromAddress;
+    const posterPath = resolvePosterPath();
+    const generatedMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@halalwealth.finance>`;
 
     if (!fs.existsSync(posterPath)) {
       if (typeof logger.warn === 'function') {
@@ -657,9 +698,106 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       }
     }
 
+    // 1. Resend HTTP API Delivery (Primary for Render Free & cloud hosting)
+    if (useResend) {
+      logger.info(`${purpose} Resend configuration check`, {
+        provider: 'Resend HTTP API',
+        fromAddress,
+        fromName,
+        replyToAddress,
+      });
+
+      let client = resendClient;
+      if (!client) {
+        if (!Resend) {
+          const error = new Error('The "resend" package is required for HTTP email delivery.');
+          error.code = 'RESEND_PACKAGE_MISSING';
+          throw error;
+        }
+        client = new Resend(resendApiKey);
+      }
+
+      const attachments = createResendPosterAttachment(posterPath);
+      const emailPayload = {
+        from: `${fromName} <${fromAddress}>`,
+        to: [recipientEmail],
+        reply_to: replyToAddress,
+        subject: messageContent.subject,
+        text: messageContent.text,
+        html: messageContent.html,
+        headers: {
+          'X-Entity-Ref-ID': generatedMessageId,
+        },
+      };
+      if (attachments.length > 0) {
+        emailPayload.attachments = attachments;
+      }
+
+      try {
+        const response = await client.emails.send(emailPayload);
+        if (response && response.error) {
+          const error = new Error(response.error.message || 'Resend email delivery rejected');
+          error.name = response.error.name || 'ResendError';
+          error.code = classifyResendError(response.error);
+          error.statusCode = response.error.statusCode || 400;
+          throw error;
+        }
+        const messageId = response?.data?.id || generatedMessageId;
+        logger.info(`HTTP message accepted for ${purpose}`, {
+          status: 'RESEND_ACCEPTED',
+          provider: 'Resend HTTP API',
+          messageId,
+          recipient: recipientEmail,
+          sender: fromAddress,
+        });
+        return {
+          status: 'RESEND_ACCEPTED',
+          id: messageId,
+          messageId,
+          accepted: [recipientEmail],
+          rejected: [],
+        };
+      } catch (error) {
+        const errorStatus = classifyResendError(error);
+        error.code = errorStatus;
+        const safeMessage = sanitizeLogValue(error && (error.message || error.code || 'Resend delivery failure'));
+        logger.error(`${purpose} Resend HTTP send failed`, {
+          status: errorStatus,
+          code: error.code || 'RESEND_SEND_FAILED',
+          response: safeMessage,
+          sender: fromAddress,
+        });
+        throw error;
+      }
+    }
+
+    // 2. SMTP Transport (For unit tests with mock createTransporter, or local dev)
+    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
+    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
+    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
+    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
+    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
+
+    // On Render Free or cloud production without RESEND_API_KEY, explicitly fail with guidance
+    // rather than hanging on blocked outbound ports (25, 465, 587)
+    if ((process.env.RENDER || process.env.NODE_ENV === 'production') && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient) {
+      const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
+      error.code = 'RESEND_KEY_MISSING';
+      logger.error(`${purpose}: Cannot send email because RESEND_API_KEY is missing on Render.`, { code: error.code });
+      throw error;
+    }
+
+    logger.info(`${purpose} SMTP configuration check`, {
+      smtpConfigured: Boolean(host && username && password && Number.isInteger(port) && port > 0),
+      hostConfigured: Boolean(host),
+      usernameConfigured: Boolean(username),
+      fromAddressConfigured: Boolean(fromAddress),
+      fromName,
+    });
+
     if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('SMTP configuration is incomplete.');
-      error.code = 'SMTP_CONFIG_INCOMPLETE';
+      const error = new Error('Email service configuration is incomplete: set RESEND_API_KEY for HTTP delivery, or SMTP credentials.');
+      error.code = 'EMAIL_CONFIG_INCOMPLETE';
       throw error;
     }
 
@@ -689,7 +827,6 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
 
     const transporter = getTransporter(transportConfig);
 
-    const generatedMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@halalwealth.finance>`;
     const mailOptions = {
       from: { name: fromName, address: fromAddress },
       replyTo: replyToAddress,
@@ -709,7 +846,7 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       const info = await transporter.sendMail(mailOptions);
       logger.info(`SMTP message accepted for ${purpose}`, {
         status: 'SMTP_ACCEPTED',
-        note: 'Accepted by SMTP server for queuing/dispatch. Note: SMTP acceptance does not guarantee inbox placement, which depends on recipient spam filters and DKIM/SPF verification.',
+        note: 'Accepted by SMTP server for queuing/dispatch.',
         messageId: getSafeMessageId(info) || generatedMessageId,
         acceptedCount: Array.isArray(info?.accepted) ? info.accepted.length : 0,
         rejectedCount: Array.isArray(info?.rejected) ? info.rejected.length : 0,
@@ -732,7 +869,6 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       throw error;
     }
   }
-
   async function sendRegistrationConfirmation(recipientEmail, recipientName) {
     const messageContent = buildRegistrationConfirmation(recipientName, resolvePosterPath());
     return sendMailForTemplate(recipientEmail, messageContent, 'webinar confirmation');
@@ -789,5 +925,7 @@ module.exports = {
   buildFeedbackEmail,
   buildCustomEmail,
   createWebinarEmailService,
+  classifyResendError,
+  createResendPosterAttachment,
   ...createWebinarEmailService(),
 };

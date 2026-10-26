@@ -410,3 +410,144 @@ test('reuses the cached transporter instance across multiple email dispatches', 
     }
   }
 });
+
+test('sends registration confirmation via Resend HTTP API when configured', async () => {
+  let sentPayload = null;
+  const mockResend = {
+    emails: {
+      send: async payload => {
+        sentPayload = payload;
+        return { data: { id: 'resend-msg-12345' }, error: null };
+      },
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  const result = await service.sendRegistrationConfirmation('attendee@example.com', 'Br. Zayd');
+
+  assert.equal(result.status, 'RESEND_ACCEPTED');
+  assert.equal(result.messageId, 'resend-msg-12345');
+  assert.equal(sentPayload.to[0], 'attendee@example.com');
+  assert.match(sentPayload.from, /info@halalwealth\.finance/);
+  assert.match(sentPayload.subject, /Thank You for Registering/);
+  assert.match(sentPayload.text, /Dear Br\. Zayd,/);
+  assert.ok(sentPayload.html.includes('Br. Zayd'));
+});
+
+test('classifies domain verification error when Resend rejects unverified domain', async () => {
+  const mockResend = {
+    emails: {
+      send: async () => ({
+        data: null,
+        error: {
+          name: 'validation_error',
+          message: 'The domain halalwealth.finance is not verified. Please verify your domain in the Resend dashboard or use onboarding@resend.dev to test.',
+          statusCode: 422,
+        },
+      }),
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  await assert.rejects(
+    async () => service.sendRegistrationConfirmation('user@example.com', 'Test User'),
+    err => {
+      assert.equal(err.code, 'RESEND_DOMAIN_NOT_VERIFIED');
+      assert.match(err.message, /not verified/);
+      return true;
+    }
+  );
+});
+
+test('classifies authentication error when Resend API key is invalid or unauthorized', async () => {
+  const mockResend = {
+    emails: {
+      send: async () => ({
+        data: null,
+        error: {
+          name: 'invalid_api_key',
+          message: 'API key is invalid. Generate a new key in the Resend dashboard.',
+          statusCode: 401,
+        },
+      }),
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  await assert.rejects(
+    async () => service.sendCustomEmail('user@example.com', { subject: 'Hi', message: 'Msg', recipientName: 'Name' }),
+    err => {
+      assert.equal(err.code, 'RESEND_AUTH_FAILED');
+      return true;
+    }
+  );
+});
+
+test('classifies rate limit error when Resend returns HTTP 429', async () => {
+  const mockResend = {
+    emails: {
+      send: async () => ({
+        data: null,
+        error: {
+          name: 'rate_limit_exceeded',
+          message: 'Too many requests. Please slow down.',
+          statusCode: 429,
+        },
+      }),
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  await assert.rejects(
+    async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
+    err => {
+      assert.equal(err.code, 'RESEND_RATE_LIMITED');
+      return true;
+    }
+  );
+});
+
+test('classifies network timeout when Resend API request times out', async () => {
+  const mockResend = {
+    emails: {
+      send: async () => {
+        const err = new Error('fetch failed: ETIMEDOUT');
+        err.code = 'ETIMEDOUT';
+        throw err;
+      },
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  await assert.rejects(
+    async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
+    err => {
+      assert.equal(err.code, 'RESEND_NETWORK_TIMEOUT');
+      return true;
+    }
+  );
+});
+
+test('prevents silent fallback to blocked SMTP ports on Render when RESEND_API_KEY is missing', async () => {
+  const prevRender = process.env.RENDER;
+  const prevResend = process.env.RESEND_API_KEY;
+  process.env.RENDER = 'true';
+  delete process.env.RESEND_API_KEY;
+
+  try {
+    const service = createWebinarEmailService();
+    await assert.rejects(
+      async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
+      err => {
+        assert.equal(err.code, 'RESEND_KEY_MISSING');
+        assert.match(err.message, /blocked on Render Free/);
+        return true;
+      }
+    );
+  } finally {
+    if (prevRender === undefined) delete process.env.RENDER;
+    else process.env.RENDER = prevRender;
+    if (prevResend === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = prevResend;
+  }
+});
