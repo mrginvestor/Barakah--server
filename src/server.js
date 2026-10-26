@@ -37,6 +37,10 @@ async function verifySmtpConfiguration() {
     secure: isSecure,
     requireTLS: !isSecure && port !== 465,
     auth: { user: username, pass: password },
+    family: 4,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 
   try {

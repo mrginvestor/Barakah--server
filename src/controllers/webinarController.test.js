@@ -57,11 +57,11 @@ test('saves the registration before sending its confirmation email', async () =>
   });
   const response = createResponse();
 
-  await handler({ body: validPayload }, response);
+  const result = await handler({ body: validPayload }, response);
+  await result.emailPromise;
 
   assert.equal(response.statusCode, 201);
   assert.equal(response.body.success, true);
-  assert.equal(response.body.confirmationEmailSent, true);
   assert.equal(sentTo, validPayload.email);
   assert.equal(sentName, validPayload.fullName);
 });
@@ -99,7 +99,8 @@ test('keeps a saved registration successful when sending its email fails', async
   });
   const response = createResponse();
 
-  await handler({ body: validPayload }, response);
+  const result = await handler({ body: validPayload }, response);
+  await result.emailPromise;
 
   assert.ok(savedRegistration);
   assert.equal(response.statusCode, 201);
@@ -160,11 +161,11 @@ test('automatically sends Zoom joining link to new registrants and records statu
   });
   const response = createResponse();
 
-  await handler({ body: validPayload }, response);
+  const result = await handler({ body: validPayload }, response);
+  await result.emailPromise;
 
   assert.equal(response.statusCode, 201);
   assert.equal(response.body.success, true);
-  assert.equal(response.body.joiningEmailSent, true);
   assert.equal(sentZoomTo, validPayload.email);
   assert.equal(sentZoomName, validPayload.fullName);
   assert.equal(updatedRecord.joiningEmailSent, true);
@@ -359,3 +360,93 @@ test('allows user from previous October webinar to register for November 1 webin
   assert.equal(createdPayload.webinarId, 'halal-wealth-nov-2026');
   assert.equal(createdPayload.email, 'october.attendee@example.com');
 });
+
+test('returns prompt HTTP 201 response immediately even when email dispatch is delayed', async () => {
+  let emailFinished = false;
+  let emailStarted = false;
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => ({ ...payload, _id: 'reg-delay-1' }),
+      findByIdAndUpdate: async () => {},
+    },
+    emailService: {
+      sendRegistrationConfirmation: async () => {
+        emailStarted = true;
+        // Simulate slow SMTP handshake
+        await new Promise(resolve => setTimeout(resolve, 300));
+        emailFinished = true;
+      },
+    },
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  const startTime = Date.now();
+  const result = await handler({ body: validPayload }, response);
+  const elapsed = Date.now() - startTime;
+
+  // The HTTP response should be returned promptly without waiting for the 300ms SMTP delay
+  assert.ok(elapsed < 200, `Expected response time under 200ms, got ${elapsed}ms`);
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.body.success, true);
+  assert.equal(emailFinished, false, 'Email should still be pending when response is sent');
+
+  await result.emailPromise;
+  assert.equal(emailFinished, true);
+});
+
+test('records email failure in database when background email dispatch fails', async () => {
+  let updatedRecord;
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => ({ ...payload, _id: 'reg-fail-db' }),
+      findByIdAndUpdate: async (id, update) => {
+        updatedRecord = { id, ...update.$set };
+        return updatedRecord;
+      },
+    },
+    emailService: {
+      sendRegistrationConfirmation: async () => {
+        const error = new Error('Connection timeout to SMTP');
+        error.code = 'ETIMEDOUT';
+        throw error;
+      },
+    },
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  const result = await handler({ body: validPayload }, response);
+  assert.equal(response.statusCode, 201);
+
+  await result.emailPromise;
+  assert.ok(updatedRecord);
+  assert.equal(updatedRecord.confirmationEmailSent, false);
+  assert.match(updatedRecord.confirmationEmailLastError, /Connection timeout to SMTP/);
+});
+
+test('handles registration cleanly when email service is disabled or unavailable', async () => {
+  let createdRecord;
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => { createdRecord = { ...payload, _id: 'reg-noemail' }; return createdRecord; },
+    },
+    emailService: null,
+    logger: createLogger(),
+  });
+  const response = createResponse();
+
+  const result = await handler({ body: validPayload }, response);
+  await result?.emailPromise;
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.body.success, true);
+  assert.ok(createdRecord);
+});
+

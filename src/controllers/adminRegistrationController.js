@@ -1391,9 +1391,16 @@ function createAdminRegistrationController({
         id: req.params.id,
       });
 
+      let userMessage = error.message || 'Failed to send email. Please check SMTP configuration and try again.';
+      if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT' || /timeout|timed out/i.test(error.message)) {
+        userMessage = 'SMTP connection timed out. Hostinger SMTP server could not be reached within the timeout limit. Please verify network connectivity or try again.';
+      } else if (error.code === 'EAUTH' || /auth|authentication/i.test(error.message)) {
+        userMessage = 'SMTP authentication failed. Please check your Hostinger email username and password.';
+      }
+
       return res.status(500).json({
         success: false,
-        message: error.message || 'Failed to send email. Please check SMTP configuration and try again.',
+        message: userMessage,
       });
     }
   }

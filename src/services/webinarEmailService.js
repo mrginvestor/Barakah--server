@@ -592,8 +592,9 @@ function getSafeMessageId(messageInfo) {
 function classifySmtpError(error) {
   const code = String(error?.code || '').toUpperCase();
   const message = String(error?.message || error?.response || '').toLowerCase();
+  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || /timeout|timedout|greeting timeout/i.test(message)) return 'SMTP_TIMEOUT';
   if (code === 'EAUTH' || /auth|authentication|535|invalid login|credentials/i.test(message)) return 'SMTP_AUTH_FAILED';
-  if (code === 'ECONNECTION' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || /connection|refused|timeout|dns|enotfound/i.test(message)) return 'SMTP_CONNECTION_FAILED';
+  if (code === 'ECONNECTION' || code === 'ECONNREFUSED' || /connection|refused|dns|enotfound/i.test(message)) return 'SMTP_CONNECTION_FAILED';
   if (/rejected|message rejected|550|554|552|553|5[0-9][0-9]|bounce|recipient/i.test(message) || /rejected/i.test(code)) return 'SMTP_MESSAGE_REJECTED';
   return 'SMTP_SEND_FAILED';
 }
@@ -610,6 +611,26 @@ function createPosterAttachment(posterPath) {
 }
 
 function createWebinarEmailService({ createTransporter = config => nodemailer.createTransport(config), logger = console } = {}) {
+  let cachedTransporter = null;
+  let cachedKey = null;
+
+  function getTransporter(transportConfig) {
+    const key = `${transportConfig.host}:${transportConfig.port}:${transportConfig.auth?.user}:${transportConfig.secure}:${Boolean(transportConfig.pool)}`;
+    if (cachedTransporter && cachedKey === key) {
+      return cachedTransporter;
+    }
+    cachedTransporter = createTransporter(transportConfig);
+    cachedKey = key;
+    return cachedTransporter;
+  }
+
+  function resetTransporter() {
+    if (cachedTransporter && typeof cachedTransporter.close === 'function') {
+      try { cachedTransporter.close(); } catch (_) {}
+    }
+    cachedTransporter = null;
+    cachedKey = null;
+  }
   async function sendMailForTemplate(recipientEmail, messageContent, purpose = 'webinar email') {
     const environment = process.env;
     const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
@@ -631,9 +652,9 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
     });
 
     if (!fs.existsSync(posterPath)) {
-      const error = new Error(`Webinar poster asset is missing: ${posterPath}`);
-      error.code = 'POSTER_MISSING';
-      throw error;
+      if (typeof logger.warn === 'function') {
+        logger.warn(`${purpose}: Webinar poster asset not found at ${posterPath}; proceeding without inline poster.`);
+      }
     }
 
     if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
@@ -721,7 +742,7 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
     return sendMailForTemplate(recipientEmail, messageContent, 'individual participant email');
   }
 
-  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder, sendFeedbackEmail, sendCustomEmail };
+  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder, sendFeedbackEmail, sendCustomEmail, resetTransporter };
 }
 
 module.exports = {

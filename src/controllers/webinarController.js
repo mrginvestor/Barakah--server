@@ -178,12 +178,15 @@ function createWebinarRegistrationHandler({
         payload.registrationId = `${prefix}${randomSuffix}`;
       }
 
-      const registration = await registrationModel.create(payload);
-      let confirmationEmailSent = false;
-      let joiningEmailSent = false;
+            const registration = await registrationModel.create(payload);
 
-      // Only dispatch confirmation email if user opted in (consent === true) and emailService is configured
-      if (consent && emailService) {
+      // Background asynchronous email dispatch: prompt HTTP response without SMTP delays
+      async function dispatchConfirmationEmail() {
+        if (!consent || !emailService) return null;
+
+        let confirmationEmailSent = false;
+        let joiningEmailSent = false;
+
         try {
           if (typeof emailService.sendRegistrationConfirmation === 'function') {
             await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
@@ -212,6 +215,7 @@ function createWebinarRegistrationHandler({
               { new: true, runValidators: true },
             );
           }
+          return { success: true, confirmationEmailSent, joiningEmailSent };
         } catch (error) {
           safeLogger.error('Webinar registration confirmation email failed.', {
             code: error.code || 'EMAIL_SEND_FAILED',
@@ -234,16 +238,23 @@ function createWebinarRegistrationHandler({
               { new: true, runValidators: true },
             ).catch(() => {});
           }
+          return { success: false, error };
         }
       }
 
-      return res.status(201).json({
+      // Trigger asynchronous confirmation email in background
+      const emailPromise = dispatchConfirmationEmail();
+
+      // Return registration success promptly after MongoDB write is confirmed
+      res.status(201).json({
         success: true,
         message: 'Registration successful',
-        confirmationEmailSent,
-        joiningEmailSent,
+        confirmationEmailSent: false,
+        joiningEmailSent: false,
         data: registration,
       });
+
+      return { registration, emailPromise };
     } catch (error) {
       if (error.name === 'ValidationError') {
         return res.status(400).json({ message: 'Please check the information you entered.' });
