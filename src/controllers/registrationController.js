@@ -42,7 +42,16 @@ function createRegistrationHandler({
 
   return async (req, res) => {
     try {
-      const data = { ...req.body, email: String(req.body.email || '').trim().toLowerCase() };
+      const rawEmail = String(req.body?.email || '').trim().toLowerCase();
+      const sanitizedRecipient = rawEmail ? rawEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null;
+      safeLogger.info('REGISTRATION_REQUEST_RECEIVED', {
+        stage: 'REGISTRATION_REQUEST_RECEIVED',
+        event: 'Halal Wealth Summit',
+        recipient: sanitizedRecipient,
+        timestamp: new Date().toISOString(),
+      });
+
+      const data = { ...req.body, email: rawEmail };
       const required = [
         'fullName',
         'countryCode',
@@ -125,8 +134,25 @@ function createRegistrationHandler({
         throw new Error('Failed to create registration record.');
       }
 
+      const sanitizedEmail = registration.email ? registration.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null;
+      safeLogger.info('REGISTRATION_SAVED', {
+        stage: 'REGISTRATION_SAVED',
+        registrationId: registration.registrationId,
+        recordId: String(registration._id),
+        event: 'Halal Wealth Summit',
+        recipient: sanitizedEmail,
+        timestamp: new Date().toISOString(),
+      });
+
       // Background asynchronous email dispatch: prompt HTTP response without SMTP delays
       async function dispatchConfirmationEmail() {
+        safeLogger.info('EMAIL_SEND_STARTED', {
+          stage: 'EMAIL_SEND_STARTED',
+          registrationId: registration.registrationId,
+          recipient: sanitizedEmail,
+          purpose: 'summit confirmation',
+          timestamp: new Date().toISOString(),
+        });
         if (!emailService || typeof emailService.sendRegistrationConfirmation !== 'function') {
           return null;
         }
@@ -150,11 +176,13 @@ function createRegistrationHandler({
           }
           return { success: true };
         } catch (emailError) {
-          safeLogger.error('Summit registration confirmation email failed.', {
+          safeLogger.error('EMAIL_SEND_FAILED', {
+            stage: 'EMAIL_SEND_FAILED',
             code: emailError.code || 'EMAIL_SEND_FAILED',
             message: emailError.message || 'Unknown email failure',
             registrationId: registration.registrationId,
-            email: registration.email,
+            recipient: sanitizedEmail,
+            timestamp: new Date().toISOString(),
           });
           if (typeof registrationModel.updateOne === 'function') {
             await registrationModel.updateOne(

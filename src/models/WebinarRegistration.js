@@ -50,12 +50,14 @@ const webinarRegistrationSchema = new mongoose.Schema({
   feedbackEmailSentAt: { type: Date, default: null },
   feedbackEmailLastError: { type: String, default: null },
   registrationId: { type: String, default: null, trim: true },
+  referenceId: { type: String, default: null, trim: true },
 }, { timestamps: true });
 
 webinarRegistrationSchema.index({ email: 1 });
 webinarRegistrationSchema.index({ createdAt: -1 });
 webinarRegistrationSchema.index({ status: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ registrationId: 1 });
+webinarRegistrationSchema.index({ referenceId: 1 }, { sparse: true });
 webinarRegistrationSchema.index({ feedbackEmailSent: 1 });
 webinarRegistrationSchema.index({ webinarVersion: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ webinarId: 1, createdAt: -1 });

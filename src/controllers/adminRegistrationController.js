@@ -161,6 +161,7 @@ function normalizeEmailTracking(registration = {}) {
   if (!normalized.registrationId && normalized._id && typeof normalized._id === 'string') {
     normalized.registrationId = normalized._id;
   }
+  normalized.referenceId = normalized.referenceId || normalized.registrationId || (normalized._id ? String(normalized._id) : '');
   if (normalized.createdAt && typeof normalized.createdAt === 'object') {
     if (normalized.createdAt.date) normalized.createdAt = new Date(normalized.createdAt.date);
     else if (normalized.createdAt.$date) normalized.createdAt = new Date(normalized.createdAt.$date);
@@ -249,6 +250,7 @@ function createAdminRegistrationController({
       { _id: rawId },
       { _id: { oid: rawId } },
       { registrationId: rawId },
+      { referenceId: rawId },
     );
     return conditions.length === 1 ? conditions[0] : { $or: conditions };
   }
@@ -1448,6 +1450,7 @@ function createAdminRegistrationController({
       if (!res.write(`${columns.map(csvCell).join(',')}\r\n`)) await once(res, 'drain');
       for await (const registration of cursor) {
         const record = normalizeStatus(registration);
+        record.referenceId = record.referenceId || record.registrationId || String(record._id);
         if (!res.write(`${columns.map(field => csvCell(record[field])).join(',')}\r\n`)) await once(res, 'drain');
       }
       return res.end();
@@ -1520,8 +1523,56 @@ function createAdminRegistrationController({
     }
   }
 
+  async function getEmailDiagnostic(req, res) {
+    try {
+      if (typeof emailService.verifyEmailService === 'function') {
+        const diagnostic = await emailService.verifyEmailService();
+        return res.json({ success: diagnostic.ok, data: diagnostic });
+      }
+      return res.json({
+        success: true,
+        data: {
+          provider: 'Unknown/Mock',
+          message: 'Diagnostic verification not implemented on custom email service.',
+        },
+      });
+    } catch (error) {
+      safeLogger.error('Admin email diagnostic check failed.', { code: error.code || 'ADMIN_EMAIL_DIAGNOSTIC_FAILED' });
+      return res.status(500).json({ success: false, message: error.message || 'Diagnostic failed.' });
+    }
+  }
+
+  async function sendTestDiagnosticEmail(req, res) {
+    try {
+      const recipient = String(req.body?.testEmail || process.env.ADMIN_EMAIL || req.admin?.email || 'info@halalwealth.finance').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+        return res.status(400).json({ success: false, message: 'Invalid recipient email address for test email.' });
+      }
+
+      await emailService.sendCustomEmail(recipient, {
+        subject: `[Diagnostic Test] Halal Wealth Email Service Check - ${new Date().toISOString()}`,
+        message: 'This is a test email sent from the Halal Wealth Webinar admin diagnostic endpoint to verify end-to-end email delivery.',
+        recipientName: 'Administrator',
+      });
+
+      return res.json({
+        success: true,
+        message: `Diagnostic test email submitted successfully to ${recipient}. Check inbox and spam folders.`,
+        recipient,
+      });
+    } catch (error) {
+      safeLogger.error('Admin send test email failed.', { code: error.code || 'ADMIN_TEST_EMAIL_FAILED', message: error.message });
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to send test email.',
+      });
+    }
+  }
+
   return {
     getWebinars,
+    getEmailDiagnostic,
+    sendTestDiagnosticEmail,
     list,
     getById,
     sendConfirmation,

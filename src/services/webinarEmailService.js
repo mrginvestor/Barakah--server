@@ -59,14 +59,24 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function buildRegistrationConfirmation(recipientName, posterAttachmentPath = null) {
-  const safeName = escapeHtml(recipientName);
+function buildRegistrationConfirmation(recipientName, posterAttachmentPath = null, options = {}) {
+  const safeName = escapeHtml(recipientName || 'there');
   const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
+
+  const hasCustomDetails = Boolean(options && (options.topic || options.date || options.time || options.includeEventDetails));
+  const topic = options?.topic || 'Halal Trade, Investments & Generational Wealth';
+  const eventDate = options?.date || 'Sunday, November 1, 2026';
+  const eventTime = options?.time || '11:00 AM IST (1:30 PM SG | 9:30 AM UAE | 8:30 AM KSA)';
+
+  const detailsText = hasCustomDetails
+    ? `\n\nEvent: Halal Wealth Webinar\nTopic: ${topic}\nDate: ${eventDate}\nTime: ${eventTime}\n`
+    : '';
+
   const text = `Dear ${recipientName},
 
 Assalamu Alaikum warahmatullahi wabarakatuh!
 
-Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.
+Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${detailsText}${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.
 
 In the meantime, stay connected with us to learn more about Islamic finance and Halal investments:
 
@@ -101,6 +111,12 @@ Halal Wealth Webinar Team`;
                 <p style="margin:0 0 16px;">Dear ${safeName},</p>
                 <p style="margin:0 0 16px;">Assalamu Alaikum warahmatullahi wabarakatuh!</p>
                 <p style="margin:0 0 16px;">Thank you for registering for our upcoming webinar. We’re delighted to have you join us.</p>
+                ${hasCustomDetails ? `
+                <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
+                  <p style="margin:0 0 6px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">${escapeHtml(topic)}</span></p>
+                  <p style="margin:0 0 6px;font-weight:700;color:#0e2d3d;">Date: <span style="font-weight:400;color:#243746;">${escapeHtml(eventDate)}</span></p>
+                  <p style="margin:0;font-weight:700;color:#0e2d3d;">Time: <span style="font-weight:400;color:#243746;">${escapeHtml(eventTime)}</span></p>
+                </div>` : ''}
                 ${posterImage}
                 <p style="margin:0 0 16px;">We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.</p>
                 <p style="margin:0 0 18px;">In the meantime, stay connected with us to learn more about Islamic finance and Halal investments:</p>
@@ -681,6 +697,28 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     cachedKey = null;
   }
   async function sendMailForTemplate(recipientEmail, messageContent, purpose = 'webinar email') {
+    const cleanRecipient = typeof recipientEmail === 'string' ? recipientEmail.trim() : '';
+    if (!cleanRecipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanRecipient) || cleanRecipient.length > 254) {
+      const error = new Error(`Invalid recipient email address: "${cleanRecipient.slice(0, 50)}"`);
+      error.code = 'INVALID_RECIPIENT_EMAIL';
+      logger.error('EMAIL_SEND_FAILED', {
+        stage: 'EMAIL_SEND_FAILED',
+        purpose,
+        code: error.code,
+        status: 'INVALID_RECIPIENT_EMAIL',
+        recipient: sanitizeLogValue(cleanRecipient),
+        response: error.message,
+        timestamp: new Date().toISOString(),
+      });
+      throw error;
+    }
+
+    if (!messageContent || !messageContent.subject || (!messageContent.text && !messageContent.html)) {
+      const error = new Error('Email messageContent must include subject, text fallback, and HTML.');
+      error.code = 'INVALID_MESSAGE_CONTENT';
+      throw error;
+    }
+
     const environment = process.env;
     const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
     const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
@@ -700,11 +738,16 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
 
     // 1. Resend HTTP API Delivery (Primary for Render Free & cloud hosting)
     if (useResend) {
-      logger.info(`${purpose} Resend configuration check`, {
+      logger.info('SMTP_CONFIGURATION_CHECK', {
+        stage: 'SMTP_CONFIGURATION_CHECK',
+        purpose,
         provider: 'Resend HTTP API',
+        transport: 'HTTPS (Port 443)',
         fromAddress,
         fromName,
         replyToAddress,
+        authConfigured: Boolean(resendApiKey),
+        timestamp: new Date().toISOString(),
       });
 
       let client = resendClient;
@@ -743,12 +786,16 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
           throw error;
         }
         const messageId = response?.data?.id || generatedMessageId;
-        logger.info(`HTTP message accepted for ${purpose}`, {
+        logger.info('EMAIL_SEND_ACCEPTED', {
+          stage: 'EMAIL_SEND_ACCEPTED',
+          purpose,
           status: 'RESEND_ACCEPTED',
           provider: 'Resend HTTP API',
           messageId,
-          recipient: recipientEmail,
+          recipient: sanitizeLogValue(cleanRecipient),
           sender: fromAddress,
+          note: 'Accepted by Resend API for transmission. Final delivery confirmed only if delivery webhook events configured.',
+          timestamp: new Date().toISOString(),
         });
         return {
           status: 'RESEND_ACCEPTED',
@@ -761,11 +808,16 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
         const errorStatus = classifyResendError(error);
         error.code = errorStatus;
         const safeMessage = sanitizeLogValue(error && (error.message || error.code || 'Resend delivery failure'));
-        logger.error(`${purpose} Resend HTTP send failed`, {
+        logger.error('EMAIL_SEND_FAILED', {
+          stage: 'EMAIL_SEND_FAILED',
+          purpose,
           status: errorStatus,
           code: error.code || 'RESEND_SEND_FAILED',
+          errorCategory: errorStatus,
           response: safeMessage,
+          recipient: sanitizeLogValue(cleanRecipient),
           sender: fromAddress,
+          timestamp: new Date().toISOString(),
         });
         throw error;
       }
@@ -778,26 +830,20 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
     const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
 
-    // On Render Free or cloud production without RESEND_API_KEY, explicitly fail with guidance
+    // On Render Free without RESEND_API_KEY, explicitly fail with guidance
     // rather than hanging on blocked outbound ports (25, 465, 587)
-    if ((process.env.RENDER || process.env.NODE_ENV === 'production') && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient) {
+    if (process.env.RENDER && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient && !hasValidResendKey) {
       const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
       error.code = 'RESEND_KEY_MISSING';
-      logger.error(`${purpose}: Cannot send email because RESEND_API_KEY is missing on Render.`, { code: error.code });
-      throw error;
-    }
-
-    logger.info(`${purpose} SMTP configuration check`, {
-      smtpConfigured: Boolean(host && username && password && Number.isInteger(port) && port > 0),
-      hostConfigured: Boolean(host),
-      usernameConfigured: Boolean(username),
-      fromAddressConfigured: Boolean(fromAddress),
-      fromName,
-    });
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: set RESEND_API_KEY for HTTP delivery, or SMTP credentials.');
-      error.code = 'EMAIL_CONFIG_INCOMPLETE';
+      logger.error('EMAIL_SEND_FAILED', {
+        stage: 'EMAIL_SEND_FAILED',
+        purpose,
+        code: error.code,
+        status: 'RESEND_KEY_MISSING',
+        recipient: sanitizeLogValue(cleanRecipient),
+        response: error.message,
+        timestamp: new Date().toISOString(),
+      });
       throw error;
     }
 
@@ -805,6 +851,28 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     const isPort587 = port === 587;
     const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
     const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    logger.info('SMTP_CONFIGURATION_CHECK', {
+      stage: 'SMTP_CONFIGURATION_CHECK',
+      purpose,
+      provider: 'Hostinger SMTP (Nodemailer)',
+      smtpConfigured: Boolean(host && username && password && Number.isInteger(port) && port > 0),
+      hostConfigured: Boolean(host),
+      host: host || 'not configured',
+      port,
+      secure,
+      usernameConfigured: Boolean(username),
+      fromAddressConfigured: Boolean(fromAddress),
+      fromAddress,
+      fromName,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+      const error = new Error('Email service configuration is incomplete: set RESEND_API_KEY for HTTP delivery, or SMTP credentials.');
+      error.code = 'EMAIL_CONFIG_INCOMPLETE';
+      throw error;
+    }
 
     const connectionTimeout = Number(readFirstDefined(environment, ['SMTP_CONNECTION_TIMEOUT_MS']) || 10000);
     const greetingTimeout = Number(readFirstDefined(environment, ['SMTP_GREETING_TIMEOUT_MS']) || 10000);
@@ -844,24 +912,35 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
 
     try {
       const info = await transporter.sendMail(mailOptions);
-      logger.info(`SMTP message accepted for ${purpose}`, {
+      const safeMessageId = getSafeMessageId(info) || generatedMessageId;
+      logger.info('EMAIL_SEND_ACCEPTED', {
+        stage: 'EMAIL_SEND_ACCEPTED',
+        purpose,
         status: 'SMTP_ACCEPTED',
-        note: 'Accepted by SMTP server for queuing/dispatch.',
-        messageId: getSafeMessageId(info) || generatedMessageId,
-        acceptedCount: Array.isArray(info?.accepted) ? info.accepted.length : 0,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        note: 'Accepted by SMTP server for transmission. Final delivery confirmed only if delivery events/DSN available.',
+        messageId: safeMessageId,
+        recipient: sanitizeLogValue(cleanRecipient),
+        acceptedCount: Array.isArray(info?.accepted) ? info.accepted.length : 1,
         rejectedCount: Array.isArray(info?.rejected) ? info.rejected.length : 0,
+        timestamp: new Date().toISOString(),
       });
       return info;
     } catch (error) {
       const errorStatus = classifySmtpError(error);
       const safeMessage = sanitizeLogValue(error && (error.message || error.response || error.code || 'SMTP send failure'));
-      logger.error(`${purpose} SMTP send failed`, {
+      logger.error('EMAIL_SEND_FAILED', {
+        stage: 'EMAIL_SEND_FAILED',
+        purpose,
         status: errorStatus,
         code: error.code || 'SMTP_SEND_FAILED',
+        errorCategory: errorStatus,
         response: safeMessage,
+        recipient: sanitizeLogValue(cleanRecipient),
         host,
         port,
         secure: transportConfig.secure,
+        timestamp: new Date().toISOString(),
       });
       if (errorStatus === 'SMTP_TIMEOUT' || errorStatus === 'SMTP_CONNECTION_FAILED') {
         resetTransporter();
@@ -869,8 +948,8 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
       throw error;
     }
   }
-  async function sendRegistrationConfirmation(recipientEmail, recipientName) {
-    const messageContent = buildRegistrationConfirmation(recipientName, resolvePosterPath());
+  async function sendRegistrationConfirmation(recipientEmail, recipientName, options = { includeEventDetails: true }) {
+    const messageContent = buildRegistrationConfirmation(recipientName, resolvePosterPath(), options);
     return sendMailForTemplate(recipientEmail, messageContent, 'webinar confirmation');
   }
 
@@ -900,7 +979,111 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     return sendMailForTemplate(recipientEmail, messageContent, 'individual participant email');
   }
 
-  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder, sendFeedbackEmail, sendCustomEmail, resetTransporter };
+  async function verifyEmailService({ timeoutMs = 10000 } = {}) {
+    const environment = process.env;
+    const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
+    const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
+    const useResend = Boolean(resendClient || hasValidResendKey);
+    const fromAddress = readFirstDefined(environment, ['RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM', 'EMAIL_FROM']) || SENDER_EMAIL;
+    const fromName = readFirstDefined(environment, ['RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
+
+    if (useResend) {
+      return {
+        ok: true,
+        provider: 'Resend HTTP API',
+        transport: 'HTTPS (Port 443)',
+        fromAddress,
+        fromName,
+        resendConfigured: true,
+        renderCompatible: true,
+        latencyMs: 0,
+      };
+    }
+
+    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
+    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
+    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
+    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
+    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
+
+    const isConfigured = Boolean(host && username && password && Number.isInteger(port) && port > 0);
+    if (!isConfigured) {
+      return {
+        ok: false,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        code: 'EMAIL_CONFIG_INCOMPLETE',
+        errorCategory: 'CONFIG_INCOMPLETE',
+        errorMessage: 'Email service configuration is incomplete: SMTP host, user, or pass missing, and RESEND_API_KEY not configured.',
+        host: host || 'not set',
+        port,
+        fromAddress,
+      };
+    }
+
+    if (process.env.RENDER && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient) {
+      return {
+        ok: false,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        code: 'RENDER_FREE_PORT_BLOCKED',
+        errorCategory: 'HOSTING_PORT_BLOCKED',
+        errorMessage: 'Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Configure RESEND_API_KEY for HTTP delivery.',
+        host,
+        port,
+        fromAddress,
+      };
+    }
+
+    const isPort465 = port === 465;
+    const isPort587 = port === 587;
+    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
+    const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    const startTime = Date.now();
+    try {
+      const transporter = createTransporter({
+        host,
+        port,
+        secure,
+        requireTLS,
+        family: 4,
+        auth: { user: username, pass: password },
+        connectionTimeout: timeoutMs,
+        greetingTimeout: timeoutMs,
+        socketTimeout: timeoutMs + 5000,
+      });
+
+      await transporter.verify();
+      const latencyMs = Date.now() - startTime;
+      return {
+        ok: true,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        transport: secure ? `SMTPS (Port ${port})` : `SMTP+STARTTLS (Port ${port})`,
+        host,
+        port,
+        secure,
+        fromAddress,
+        fromName,
+        authenticatedUser: username,
+        latencyMs,
+      };
+    } catch (error) {
+      const latencyMs = Date.now() - startTime;
+      const errorCategory = classifySmtpError(error);
+      return {
+        ok: false,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        code: error.code || 'SMTP_VERIFY_FAILED',
+        errorCategory,
+        errorMessage: sanitizeLogValue(error.message || 'SMTP connection/auth failed'),
+        host,
+        port,
+        secure,
+        latencyMs,
+      };
+    }
+  }
+
+  return { sendRegistrationConfirmation, sendPostponementAnnouncement, sendZoomJoiningLink, sendOneHourReminder, sendFeedbackEmail, sendCustomEmail, verifyEmailService, resetTransporter };
 }
 
 module.exports = {
@@ -927,5 +1110,6 @@ module.exports = {
   createWebinarEmailService,
   classifyResendError,
   createResendPosterAttachment,
+  verifyEmailService: (...args) => createWebinarEmailService().verifyEmailService(...args),
   ...createWebinarEmailService(),
 };

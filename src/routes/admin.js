@@ -18,6 +18,8 @@ const loginRateLimit = rateLimit({
 router.post('/login', loginRateLimit, authController.login);
 router.use(requireAdmin);
 router.get('/session', authController.getSession);
+router.get('/email/diagnostic', registrationController.getEmailDiagnostic);
+router.post('/email/test-send', registrationController.sendTestDiagnosticEmail);
 router.get('/webinars', registrationController.getWebinars);
 router.get('/registrations/export', registrationController.exportCsv);
 router.get('/registrations/joining-campaign', registrationController.getJoiningCampaignPreview);

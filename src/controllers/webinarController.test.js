@@ -5,6 +5,7 @@ const {
   getWebinarRegistrationStatusHandler,
   isWebinarRegistrationClosed,
   REGISTRATION_CLOSED_MESSAGE,
+  generateWebinarReferenceId,
 } = require('./webinarController');
 
 const validPayload = {
@@ -448,5 +449,113 @@ test('handles registration cleanly when email service is disabled or unavailable
   assert.equal(response.statusCode, 201);
   assert.equal(response.body.success, true);
   assert.ok(createdRecord);
+});
+
+test('generates unique uppercase cryptographically secure reference ID in format HW-2026-XXXXXXXX', () => {
+  const id1 = generateWebinarReferenceId();
+  const id2 = generateWebinarReferenceId();
+
+  assert.match(id1, /^HW-2026-[0-9A-F]{8}$/);
+  assert.match(id2, /^HW-2026-[0-9A-F]{8}$/);
+  assert.notEqual(id1, id2, 'Two generated reference IDs should be distinct');
+});
+
+test('automatically assigns referenceId and returns it in registration response', async () => {
+  let createdPayload;
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => {
+        createdPayload = payload;
+        return { ...payload, _id: 'mongo-id-123' };
+      },
+    },
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+
+  await handler({ body: validPayload }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.success, true);
+  assert.ok(res.body.referenceId);
+  assert.match(res.body.referenceId, /^HW-2026-[0-9A-F]{8}$/);
+  assert.equal(createdPayload.referenceId, res.body.referenceId);
+  assert.ok(res.body.registrationId);
+});
+
+test('retries on duplicate key collision and generates a new referenceId', async () => {
+  let attempts = 0;
+  const attemptedIds = [];
+  const handler = createWebinarRegistrationHandler({
+    isRegistrationClosed: () => false,
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => {
+        attempts += 1;
+        attemptedIds.push(payload.referenceId);
+        if (attempts === 1) {
+          const err = new Error('E11000 duplicate key error collection: webinarregistrations index: referenceId_1 dup key');
+          err.code = 11000;
+          throw err;
+        }
+        return { ...payload, _id: 'collision-retry-id' };
+      },
+    },
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+
+  await handler({ body: validPayload }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(attempts, 2);
+  assert.equal(attemptedIds.length, 2);
+  assert.notEqual(attemptedIds[0], attemptedIds[1]);
+  assert.equal(res.body.referenceId, attemptedIds[1]);
+});
+
+test('validates WhatsApp direct link with registrant name, reference ID, and prefilled template', () => {
+  const WHATSAPP_PHONE = '919790655520';
+
+  function buildTestWhatsAppUrl(name, refId) {
+    const message =
+      `Assalamu Alaikum,\n\n` +
+      `I have successfully registered for the webinar "Halal Investment and Retirement Planning".\n\n` +
+      `Name: ${name}\n` +
+      `Reference ID: ${refId}\n\n` +
+      `Please share the webinar announcements, updates, and joining link.\n\n` +
+      `JazakAllahu Khairan.`;
+    return `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(message)}`;
+  }
+
+  // Registration 1: Zayd Patel
+  const ref1 = 'HW-2026-A1B2C3D4';
+  const name1 = 'Zayd Patel';
+  const url1 = buildTestWhatsAppUrl(name1, ref1);
+
+  assert.ok(url1.startsWith('https://wa.me/919790655520?text='));
+  const parsed1 = new URL(url1);
+  const text1 = parsed1.searchParams.get('text');
+  assert.ok(text1.includes('Assalamu Alaikum,'));
+  assert.ok(text1.includes('Name: Zayd Patel'));
+  assert.ok(text1.includes(`Reference ID: ${ref1}`));
+  assert.ok(text1.includes('Halal Investment and Retirement Planning'));
+  assert.ok(text1.includes('JazakAllahu Khairan.'));
+
+  // Registration 2: Fatima Al-Mansoor (with hyphen and spaces)
+  const ref2 = 'HW-2026-E5F67890';
+  const name2 = 'Fatima Al-Mansoor';
+  const url2 = buildTestWhatsAppUrl(name2, ref2);
+
+  assert.ok(url2.startsWith('https://wa.me/919790655520?text='));
+  const parsed2 = new URL(url2);
+  const text2 = parsed2.searchParams.get('text');
+  assert.ok(text2.includes('Name: Fatima Al-Mansoor'));
+  assert.ok(text2.includes(`Reference ID: ${ref2}`));
+  assert.notEqual(url1, url2, 'WhatsApp URLs for different users must be distinct');
 });
 

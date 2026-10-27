@@ -1,13 +1,23 @@
+const crypto = require('crypto');
 const WebinarRegistration = require('../models/WebinarRegistration');
 const Webinar = require('../models/Webinar');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
 const { parsePhoneNumberFromString } = require('libphonenumber-js/max');
 const webinarEmailService = require('../services/webinarEmailService');
 
+function generateWebinarReferenceId() {
+  const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
+  return `HW-2026-${randomHex}`;
+}
+
 function normalizeLegacyRegistration(registration) {
   const location = String(registration.location || [registration.city, registration.state, registration.country].filter(Boolean).join(', ')).trim();
+  const refId = String(registration.referenceId || registration.registrationId || registration._id || '').trim();
+  const regId = String(registration.registrationId || registration.referenceId || registration._id || '').trim();
   return {
     _id: registration._id,
+    referenceId: refId,
+    registrationId: regId,
     fullName: registration.fullName,
     email: registration.email,
     whatsapp: String(registration.whatsapp || registration.phone || '').trim(),
@@ -64,6 +74,15 @@ function createWebinarRegistrationHandler({
 
   return async (req, res) => {
     try {
+      const rawEmail = String(req.body?.email || '').trim().toLowerCase();
+      const sanitizedRecipient = rawEmail ? rawEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null;
+      safeLogger.info('REGISTRATION_REQUEST_RECEIVED', {
+        stage: 'REGISTRATION_REQUEST_RECEIVED',
+        recipient: sanitizedRecipient,
+        webinarId: req.body?.webinarId || 'halal-wealth-nov-2026',
+        timestamp: new Date().toISOString(),
+      });
+
       const closed = typeof isRegistrationClosed === 'function'
         ? isRegistrationClosed()
         : Boolean(isRegistrationClosed);
@@ -172,31 +191,105 @@ function createWebinarRegistrationHandler({
         return res.status(400).json({ message: 'This email address is already registered for this webinar.' });
       }
 
+      if (!payload.referenceId) {
+        payload.referenceId = generateWebinarReferenceId();
+      }
       if (!payload.registrationId) {
         const randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase();
         const prefix = payload.webinarVersion === 'Business Webinar 2026' ? 'HWW-B26-' : (payload.webinarId === 'halal-wealth-nov-2026' ? 'HWW-N26-' : 'HWW-REG-');
         payload.registrationId = `${prefix}${randomSuffix}`;
       }
 
-            const registration = await registrationModel.create(payload);
+      let registration;
+      let attempts = 0;
+      const maxAttempts = 5;
+
+      while (attempts < maxAttempts) {
+        attempts += 1;
+        try {
+          registration = await registrationModel.create(payload);
+          break;
+        } catch (saveError) {
+          const isDuplicateKey = saveError?.code === 11000 || (saveError?.name === 'MongoServerError' && saveError?.code === 11000);
+          const isEmailConflict = /email/i.test(saveError?.message || '');
+          if (isDuplicateKey && !isEmailConflict && attempts < maxAttempts) {
+            payload.referenceId = generateWebinarReferenceId();
+            const randomSuffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+            const prefix = payload.webinarVersion === 'Business Webinar 2026' ? 'HWW-B26-' : (payload.webinarId === 'halal-wealth-nov-2026' ? 'HWW-N26-' : 'HWW-REG-');
+            payload.registrationId = `${prefix}${randomSuffix}`;
+            continue;
+          }
+          throw saveError;
+        }
+      }
+
+      const sanitizedRecipientEmail = registration.email ? registration.email.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null;
+
+      safeLogger.info('REGISTRATION_SAVED', {
+        stage: 'REGISTRATION_SAVED',
+        registrationId: registration.registrationId,
+        referenceId: registration.referenceId || payload.referenceId,
+        recordId: String(registration._id),
+        webinarId: registration.webinarId,
+        recipient: sanitizedRecipientEmail,
+        timestamp: new Date().toISOString(),
+      });
 
       // Background asynchronous email dispatch: prompt HTTP response without SMTP delays
       async function dispatchConfirmationEmail() {
         if (!consent || !emailService) return null;
 
+        safeLogger.info('EMAIL_SEND_STARTED', {
+          stage: 'EMAIL_SEND_STARTED',
+          registrationId: registration.registrationId,
+          recipient: sanitizedRecipientEmail,
+          purpose: 'webinar confirmation',
+          timestamp: new Date().toISOString(),
+        });
+
         let confirmationEmailSent = false;
         let joiningEmailSent = false;
 
-        try {
+        function isRetryable(err) {
+          const code = String(err?.code || '').toUpperCase();
+          const msg = String(err?.message || '').toLowerCase();
+          if (code === 'INVALID_RECIPIENT_EMAIL' || code === 'SMTP_AUTH_FAILED' || code === 'EAUTH' || code === 'RESEND_KEY_MISSING' || code === 'RESEND_AUTH_FAILED') {
+            return false;
+          }
+          return code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'ECONNRESET' || code === 'RESEND_NETWORK_TIMEOUT' || code === 'RESEND_RATE_LIMITED' || /timeout/i.test(msg);
+        }
+
+        async function attemptSend() {
           if (typeof emailService.sendRegistrationConfirmation === 'function') {
-            await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
+            await emailService.sendRegistrationConfirmation(registration.email, registration.fullName, {
+              includeEventDetails: true,
+              topic: 'Halal Trade, Investments & Generational Wealth',
+              date: 'Sunday, November 1, 2026',
+              time: '11:00 AM IST (1:30 PM SG | 9:30 AM UAE | 8:30 AM KSA)',
+            });
             confirmationEmailSent = true;
-            safeLogger.info('Webinar registration confirmation email sent.', { email: registration.email });
           } else if (typeof emailService.sendZoomJoiningLink === 'function') {
             await emailService.sendZoomJoiningLink(registration.email, registration.fullName);
             joiningEmailSent = true;
             confirmationEmailSent = true;
-            safeLogger.info('Webinar registration Zoom joining email sent.', { email: registration.email });
+          }
+        }
+
+        try {
+          try {
+            await attemptSend();
+          } catch (initialErr) {
+            if (isRetryable(initialErr)) {
+              safeLogger.info('EMAIL_SEND_RETRYING', {
+                stage: 'EMAIL_SEND_RETRYING',
+                registrationId: registration.registrationId,
+                reason: initialErr.message,
+              });
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await attemptSend();
+            } else {
+              throw initialErr;
+            }
           }
 
           if (typeof registrationModel.findByIdAndUpdate === 'function') {
@@ -249,9 +342,12 @@ function createWebinarRegistrationHandler({
       res.status(201).json({
         success: true,
         message: 'Registration successful',
+        referenceId: registration.referenceId || payload.referenceId,
+        registrationId: registration.registrationId || payload.registrationId,
         confirmationEmailSent: false,
         joiningEmailSent: false,
         data: registration,
+        registration,
       });
 
       return { registration, emailPromise };
@@ -289,6 +385,7 @@ function createGetWebinarsHandler({ webinarModel = Webinar } = {}) {
   };
 }
 
+exports.generateWebinarReferenceId = generateWebinarReferenceId;
 exports.REGISTRATION_CLOSED_MESSAGE = REGISTRATION_CLOSED_MESSAGE;
 exports.isWebinarRegistrationClosed = isWebinarRegistrationClosed;
 exports.createWebinarRegistration = createWebinarRegistrationHandler();
