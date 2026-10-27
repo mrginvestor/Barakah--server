@@ -253,7 +253,18 @@ function createWebinarRegistrationHandler({
         function isRetryable(err) {
           const code = String(err?.code || '').toUpperCase();
           const msg = String(err?.message || '').toLowerCase();
-          if (code === 'INVALID_RECIPIENT_EMAIL' || code === 'SMTP_AUTH_FAILED' || code === 'EAUTH' || code === 'RESEND_KEY_MISSING' || code === 'RESEND_AUTH_FAILED') {
+          if (
+            code === 'INVALID_RECIPIENT_EMAIL' ||
+            code === 'SMTP_AUTH_FAILED' ||
+            code === 'EAUTH' ||
+            code === 'RESEND_KEY_MISSING' ||
+            code === 'RESEND_KEY_INVALID' ||
+            code === 'RESEND_AUTH_FAILED' ||
+            code === 'RESEND_DOMAIN_NOT_VERIFIED' ||
+            code === 'RESEND_PUBLIC_DOMAIN_PROHIBITED' ||
+            code === 'EMAIL_CONFIG_INCOMPLETE' ||
+            code === 'RENDER_SMTP_PORT_BLOCKED'
+          ) {
             return false;
           }
           return code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'ECONNRESET' || code === 'RESEND_NETWORK_TIMEOUT' || code === 'RESEND_RATE_LIMITED' || /timeout/i.test(msg);

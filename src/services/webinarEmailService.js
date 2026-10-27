@@ -624,22 +624,106 @@ function classifySmtpError(error) {
 function classifyResendError(error) {
   const code = String(error?.code || '').toUpperCase();
   const name = String(error?.name || '').toLowerCase();
-  const message = String(error?.message || '').toLowerCase();
+  const message = String(error?.message || error?.error?.message || '').toLowerCase();
   const statusCode = error?.statusCode || error?.status;
 
-  if (statusCode === 401 || statusCode === 403 || /api_key|api key|invalid api|unauthorized|forbidden|not authorized/i.test(message) || name.includes('auth')) {
-    return 'RESEND_AUTH_FAILED';
-  }
-  if (statusCode === 429 || /rate limit|too many requests|quota/i.test(message)) {
-    return 'RESEND_RATE_LIMITED';
-  }
-  if (statusCode === 422 || /domain|not verified|sender|onboarding@resend.dev/i.test(message) || name.includes('domain')) {
+  // Domain verification checks MUST precede status code checks
+  // Resend returns HTTP 403 or 422 with message containing "domain is not verified"
+  if (
+    statusCode === 422 ||
+    /domain|not verified|verify your domain|unverified domain|sender domain|onboarding@resend\.dev/i.test(message) ||
+    name.includes('domain') ||
+    name === 'validation_error'
+  ) {
     return 'RESEND_DOMAIN_NOT_VERIFIED';
   }
-  if (/timeout|timed out|abort|econnreset|etimedout|fetch failed/i.test(message) || code === 'ETIMEDOUT') {
+  if (
+    statusCode === 401 ||
+    statusCode === 403 ||
+    /api_key|api key|invalid api|unauthorized|forbidden|not authorized|restricted to only/i.test(message) ||
+    name.includes('auth') ||
+    name === 'invalid_api_key'
+  ) {
+    return 'RESEND_AUTH_FAILED';
+  }
+  if (
+    statusCode === 429 ||
+    /rate limit|too many requests|quota/i.test(message) ||
+    name.includes('rate_limit')
+  ) {
+    return 'RESEND_RATE_LIMITED';
+  }
+  if (
+    /timeout|timed out|abort|econnreset|etimedout|fetch failed/i.test(message) ||
+    code === 'ETIMEDOUT' ||
+    code === 'ESOCKETTIMEDOUT'
+  ) {
     return 'RESEND_NETWORK_TIMEOUT';
   }
   return error?.code || 'RESEND_API_ERROR';
+}
+
+function parseSenderString(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^(?:(?:"?([^"<]+)"?\s*)?<)?([^<>\s@]+@[^<>\s@]+)>?$/);
+  if (match) {
+    return {
+      name: (match[1] || '').trim(),
+      address: (match[2] || '').trim(),
+    };
+  }
+  return { name: '', address: trimmed };
+}
+
+function resolveSenderConfig(environment = process.env) {
+  const rawSender = readFirstDefined(environment, ['EMAIL_FROM', 'RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
+  const parsed = parseSenderString(rawSender);
+
+  const configuredName = readFirstDefined(environment, ['EMAIL_FROM_NAME', 'RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']);
+  const fromName = configuredName || (parsed && parsed.name) || DEFAULT_FROM_NAME;
+  const fromAddress = (parsed && parsed.address) || SENDER_EMAIL;
+
+  const rawReplyTo = readFirstDefined(environment, ['EMAIL_REPLY_TO', 'RESEND_REPLY_TO', 'MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']);
+  const parsedReplyTo = parseSenderString(rawReplyTo);
+  const replyToAddress = (parsedReplyTo && parsedReplyTo.address) || fromAddress;
+
+  return { fromName, fromAddress, replyToAddress };
+}
+
+function resolveProviderConfig(environment = process.env, resendClient = null) {
+  const explicitProvider = readFirstDefined(environment, ['EMAIL_PROVIDER']).toLowerCase();
+  const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
+  const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
+  const isRender = Boolean(environment.RENDER);
+  const allowSmtpOnRender = String(readFirstDefined(environment, ['ALLOW_SMTP_ON_RENDER'])).toLowerCase() === 'true';
+
+  let provider;
+  if (explicitProvider === 'resend') {
+    provider = 'resend';
+  } else if (explicitProvider === 'smtp') {
+    provider = 'smtp';
+  } else if (resendClient) {
+    provider = 'resend';
+  } else if (isRender) {
+    // On Render, strictly default to Resend to prevent timeouts on blocked outbound SMTP ports
+    provider = 'resend';
+  } else if (hasValidResendKey) {
+    provider = 'resend';
+  } else {
+    provider = 'smtp';
+  }
+
+  return {
+    provider,
+    explicitProvider,
+    resendApiKey,
+    hasValidResendKey,
+    isRender,
+    allowSmtpOnRender,
+    useResend: provider === 'resend',
+  };
 }
 
 function createResendPosterAttachment(posterPath) {
@@ -648,7 +732,7 @@ function createResendPosterAttachment(posterPath) {
     const fileBuffer = fs.readFileSync(posterPath);
     return [{
       filename: 'webinar-poster.png',
-      content: fileBuffer.toString('base64'),
+      content: fileBuffer,
       contentType: 'image/png',
       contentId: POSTER_CID,
       content_id: POSTER_CID,
@@ -720,13 +804,8 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     }
 
     const environment = process.env;
-    const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
-    const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
-    const useResend = Boolean(resendClient || hasValidResendKey);
-
-    const fromAddress = readFirstDefined(environment, ['RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM', 'EMAIL_FROM']) || SENDER_EMAIL;
-    const fromName = readFirstDefined(environment, ['RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
-    const replyToAddress = readFirstDefined(environment, ['RESEND_REPLY_TO', 'MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']) || fromAddress;
+    const providerConfig = resolveProviderConfig(environment, resendClient);
+    const { fromName, fromAddress, replyToAddress } = resolveSenderConfig(environment);
     const posterPath = resolvePosterPath();
     const generatedMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@halalwealth.finance>`;
 
@@ -737,7 +816,22 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     }
 
     // 1. Resend HTTP API Delivery (Primary for Render Free & cloud hosting)
-    if (useResend) {
+    if (providerConfig.useResend) {
+      if (!providerConfig.hasValidResendKey && !resendClient) {
+        const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
+        error.code = 'RESEND_KEY_MISSING';
+        logger.error('EMAIL_SEND_FAILED', {
+          stage: 'EMAIL_SEND_FAILED',
+          purpose,
+          code: error.code,
+          status: 'RESEND_KEY_MISSING',
+          recipient: sanitizeLogValue(cleanRecipient),
+          response: error.message,
+          timestamp: new Date().toISOString(),
+        });
+        throw error;
+      }
+
       logger.info('SMTP_CONFIGURATION_CHECK', {
         stage: 'SMTP_CONFIGURATION_CHECK',
         purpose,
@@ -746,7 +840,7 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
         fromAddress,
         fromName,
         replyToAddress,
-        authConfigured: Boolean(resendApiKey),
+        authConfigured: Boolean(providerConfig.resendApiKey),
         timestamp: new Date().toISOString(),
       });
 
@@ -757,7 +851,7 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
           error.code = 'RESEND_PACKAGE_MISSING';
           throw error;
         }
-        client = new Resend(resendApiKey);
+        client = new Resend(providerConfig.resendApiKey);
       }
 
       const attachments = createResendPosterAttachment(posterPath);
@@ -830,16 +924,15 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
     const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
 
-    // On Render Free without RESEND_API_KEY, explicitly fail with guidance
-    // rather than hanging on blocked outbound ports (25, 465, 587)
-    if (process.env.RENDER && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient && !hasValidResendKey) {
-      const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
-      error.code = 'RESEND_KEY_MISSING';
+    // On Render without ALLOW_SMTP_ON_RENDER, explicitly fail rather than hanging on blocked ports (25, 465, 587)
+    if (providerConfig.isRender && !providerConfig.allowSmtpOnRender && !resendClient) {
+      const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please use EMAIL_PROVIDER=resend and configure RESEND_API_KEY for HTTP email delivery.');
+      error.code = 'RENDER_SMTP_PORT_BLOCKED';
       logger.error('EMAIL_SEND_FAILED', {
         stage: 'EMAIL_SEND_FAILED',
         purpose,
         code: error.code,
-        status: 'RESEND_KEY_MISSING',
+        status: 'RENDER_SMTP_PORT_BLOCKED',
         recipient: sanitizeLogValue(cleanRecipient),
         response: error.message,
         timestamp: new Date().toISOString(),
@@ -981,13 +1074,73 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
 
   async function verifyEmailService({ timeoutMs = 10000 } = {}) {
     const environment = process.env;
-    const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
-    const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
-    const useResend = Boolean(resendClient || hasValidResendKey);
-    const fromAddress = readFirstDefined(environment, ['RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM', 'EMAIL_FROM']) || SENDER_EMAIL;
-    const fromName = readFirstDefined(environment, ['RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
+    const providerConfig = resolveProviderConfig(environment, resendClient);
+    const { fromName, fromAddress } = resolveSenderConfig(environment);
 
-    if (useResend) {
+    if (providerConfig.useResend) {
+      if (!providerConfig.hasValidResendKey && !resendClient) {
+        return {
+          ok: false,
+          provider: 'Resend HTTP API',
+          transport: 'HTTPS (Port 443)',
+          code: 'RESEND_KEY_MISSING',
+          errorCategory: 'CONFIG_INCOMPLETE',
+          errorMessage: 'RESEND_API_KEY is not configured in environment variables. Outbound SMTP ports (25, 465, 587) are blocked on Render Free, so RESEND_API_KEY is required for HTTP delivery.',
+          fromAddress,
+          fromName,
+          renderCompatible: false,
+          latencyMs: 0,
+        };
+      }
+
+      const key = providerConfig.resendApiKey;
+      if (key && !resendClient && (!key.startsWith('re_') || isPlaceholderValue(key))) {
+        return {
+          ok: false,
+          provider: 'Resend HTTP API',
+          transport: 'HTTPS (Port 443)',
+          code: 'RESEND_KEY_INVALID',
+          errorCategory: 'CONFIG_INVALID',
+          errorMessage: 'RESEND_API_KEY appears invalid (keys must start with "re_"). Please verify your Resend API key.',
+          fromAddress,
+          fromName,
+          renderCompatible: false,
+          latencyMs: 0,
+        };
+      }
+
+      const domain = fromAddress.split('@')[1]?.toLowerCase() || '';
+      const PUBLIC_WEBMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
+      if (PUBLIC_WEBMAIL_DOMAINS.includes(domain)) {
+        return {
+          ok: false,
+          provider: 'Resend HTTP API',
+          transport: 'HTTPS (Port 443)',
+          code: 'RESEND_PUBLIC_DOMAIN_PROHIBITED',
+          errorCategory: 'DOMAIN_NOT_SUPPORTED',
+          errorMessage: `Resend prohibits sending from public webmail domains like @${domain}. You must use a verified custom domain (e.g. info@halalwealth.finance) or 'onboarding@resend.dev' for testing.`,
+          fromAddress,
+          fromName,
+          renderCompatible: true,
+          latencyMs: 0,
+        };
+      }
+
+      if (!Resend && !resendClient) {
+        return {
+          ok: false,
+          provider: 'Resend HTTP API',
+          transport: 'HTTPS (Port 443)',
+          code: 'RESEND_PACKAGE_MISSING',
+          errorCategory: 'DEPENDENCY_MISSING',
+          errorMessage: 'The "resend" npm package is not installed.',
+          fromAddress,
+          fromName,
+          renderCompatible: false,
+          latencyMs: 0,
+        };
+      }
+
       return {
         ok: true,
         provider: 'Resend HTTP API',
@@ -1110,6 +1263,8 @@ module.exports = {
   createWebinarEmailService,
   classifyResendError,
   createResendPosterAttachment,
+  resolveSenderConfig,
+  resolveProviderConfig,
   verifyEmailService: (...args) => createWebinarEmailService().verifyEmailService(...args),
   ...createWebinarEmailService(),
 };

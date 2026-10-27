@@ -551,3 +551,99 @@ test('prevents silent fallback to blocked SMTP ports on Render when RESEND_API_K
     else process.env.RESEND_API_KEY = prevResend;
   }
 });
+
+test('classifies HTTP 403 domain verification error from Resend as RESEND_DOMAIN_NOT_VERIFIED', async () => {
+  const mockResend = {
+    emails: {
+      send: async () => ({
+        data: null,
+        error: {
+          statusCode: 403,
+          message: 'The halalwealth.finance domain is not verified. Please, add and verify your domain on https://resend.com/domains',
+          name: 'application_error',
+        },
+      }),
+    },
+  };
+
+  const service = createWebinarEmailService({ resendClient: mockResend });
+  await assert.rejects(
+    async () => service.sendRegistrationConfirmation('user@example.com', 'Test User'),
+    err => {
+      assert.equal(err.code, 'RESEND_DOMAIN_NOT_VERIFIED');
+      return true;
+    }
+  );
+});
+
+test('resolves EMAIL_FROM and EMAIL_FROM_NAME correctly with formatted strings', () => {
+  const { resolveSenderConfig } = require('./webinarEmailService');
+  const env1 = {
+    EMAIL_FROM: 'Halal Wealth <info@halalwealth.finance>',
+    MAIL_FROM: 'old@example.com',
+  };
+  const res1 = resolveSenderConfig(env1);
+  assert.equal(res1.fromAddress, 'info@halalwealth.finance');
+  assert.equal(res1.fromName, 'Halal Wealth');
+
+  const env2 = {
+    EMAIL_FROM: 'info@halalwealth.finance',
+    EMAIL_FROM_NAME: 'Custom Sender',
+    MAIL_FROM: 'old@example.com',
+  };
+  const res2 = resolveSenderConfig(env2);
+  assert.equal(res2.fromAddress, 'info@halalwealth.finance');
+  assert.equal(res2.fromName, 'Custom Sender');
+});
+
+test('resolves EMAIL_PROVIDER resend and smtp explicitly and auto-detects on Render', () => {
+  const { resolveProviderConfig } = require('./webinarEmailService');
+  assert.equal(resolveProviderConfig({ EMAIL_PROVIDER: 'resend' }).provider, 'resend');
+  assert.equal(resolveProviderConfig({ EMAIL_PROVIDER: 'smtp' }).provider, 'smtp');
+  assert.equal(resolveProviderConfig({ RENDER: 'true' }).provider, 'resend');
+  assert.equal(resolveProviderConfig({ RESEND_API_KEY: 're_123456789' }).provider, 'resend');
+  assert.equal(resolveProviderConfig({}).provider, 'smtp');
+});
+
+test('blocks SMTP delivery on Render when EMAIL_PROVIDER=smtp without ALLOW_SMTP_ON_RENDER', async () => {
+  const prevRender = process.env.RENDER;
+  const prevProvider = process.env.EMAIL_PROVIDER;
+  process.env.RENDER = 'true';
+  process.env.EMAIL_PROVIDER = 'smtp';
+
+  try {
+    const service = createWebinarEmailService();
+    await assert.rejects(
+      async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
+      err => {
+        assert.equal(err.code, 'RENDER_SMTP_PORT_BLOCKED');
+        assert.match(err.message, /blocked on Render Free/);
+        return true;
+      }
+    );
+  } finally {
+    if (prevRender === undefined) delete process.env.RENDER;
+    else process.env.RENDER = prevRender;
+    if (prevProvider === undefined) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = prevProvider;
+  }
+});
+
+test('verifyEmailService reports RESEND_PUBLIC_DOMAIN_PROHIBITED for @gmail.com', async () => {
+  const prevKey = process.env.RESEND_API_KEY;
+  const prevFrom = process.env.EMAIL_FROM;
+  process.env.RESEND_API_KEY = 're_test_valid_key_123';
+  process.env.EMAIL_FROM = 'halalwealth2026@gmail.com';
+
+  try {
+    const service = createWebinarEmailService();
+    const result = await service.verifyEmailService();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'RESEND_PUBLIC_DOMAIN_PROHIBITED');
+  } finally {
+    if (prevKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = prevKey;
+    if (prevFrom === undefined) delete process.env.EMAIL_FROM;
+    else process.env.EMAIL_FROM = prevFrom;
+  }
+});
