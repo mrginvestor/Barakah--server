@@ -52,6 +52,22 @@ Halal Wealth Webinar Team`);
   assert.doesNotMatch(email.text, /\[Name\]|\{\{name\}\}/);
 });
 
+test('builds the registration confirmation email with user-provided Zoom link when details are included', () => {
+  const email = buildRegistrationConfirmation('Amina', null, { includeEventDetails: true });
+
+  assert.equal(email.subject, 'Thank You for Registering for Our Webinar');
+  assert.match(email.text, /Zoom Meeting Link: https:\/\/us06web\.zoom\.us\/j\/81487983324/);
+  assert.match(email.text, /Meeting ID: 814 8798 3324/);
+  assert.match(email.text, /Passcode: 666991/);
+  assert.match(email.html, /Click Here to Join Zoom Webinar/);
+  assert.match(email.html, /https:\/\/us06web\.zoom\.us\/j\/81487983324\?pwd=iiWszjuBKKDHZ7SNibjY9aUkfFVEvS\.1/);
+  assert.match(email.html, /Meeting ID: <strong style="color:#d4af5a;">814 8798 3324<\/strong>/);
+  assert.match(email.html, /Passcode: <strong style="color:#d4af5a;">666991<\/strong>/);
+  assert.match(email.text, /Assalamu Alaikum warahmatullahi wabarakatuh!/);
+  assert.match(email.text, /We will be sharing the webinar access link with you shortly\./);
+  assert.match(email.text, /YouTube: https:\/\/youtube\.com\/@ethicalfinancebasithtamil/);
+});
+
 test('builds the Zoom joining details email with exact details and credentials', () => {
   const email = buildZoomJoiningDetails('Brother Tariq');
 
@@ -411,171 +427,6 @@ test('reuses the cached transporter instance across multiple email dispatches', 
   }
 });
 
-test('sends registration confirmation via Resend HTTP API when configured', async () => {
-  let sentPayload = null;
-  const mockResend = {
-    emails: {
-      send: async payload => {
-        sentPayload = payload;
-        return { data: { id: 'resend-msg-12345' }, error: null };
-      },
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  const result = await service.sendRegistrationConfirmation('attendee@example.com', 'Br. Zayd');
-
-  assert.equal(result.status, 'RESEND_ACCEPTED');
-  assert.equal(result.messageId, 'resend-msg-12345');
-  assert.equal(sentPayload.to[0], 'attendee@example.com');
-  assert.match(sentPayload.from, /info@halalwealth\.finance/);
-  assert.match(sentPayload.subject, /Thank You for Registering/);
-  assert.match(sentPayload.text, /Dear Br\. Zayd,/);
-  assert.ok(sentPayload.html.includes('Br. Zayd'));
-});
-
-test('classifies domain verification error when Resend rejects unverified domain', async () => {
-  const mockResend = {
-    emails: {
-      send: async () => ({
-        data: null,
-        error: {
-          name: 'validation_error',
-          message: 'The domain halalwealth.finance is not verified. Please verify your domain in the Resend dashboard or use onboarding@resend.dev to test.',
-          statusCode: 422,
-        },
-      }),
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  await assert.rejects(
-    async () => service.sendRegistrationConfirmation('user@example.com', 'Test User'),
-    err => {
-      assert.equal(err.code, 'RESEND_DOMAIN_NOT_VERIFIED');
-      assert.match(err.message, /not verified/);
-      return true;
-    }
-  );
-});
-
-test('classifies authentication error when Resend API key is invalid or unauthorized', async () => {
-  const mockResend = {
-    emails: {
-      send: async () => ({
-        data: null,
-        error: {
-          name: 'invalid_api_key',
-          message: 'API key is invalid. Generate a new key in the Resend dashboard.',
-          statusCode: 401,
-        },
-      }),
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  await assert.rejects(
-    async () => service.sendCustomEmail('user@example.com', { subject: 'Hi', message: 'Msg', recipientName: 'Name' }),
-    err => {
-      assert.equal(err.code, 'RESEND_AUTH_FAILED');
-      return true;
-    }
-  );
-});
-
-test('classifies rate limit error when Resend returns HTTP 429', async () => {
-  const mockResend = {
-    emails: {
-      send: async () => ({
-        data: null,
-        error: {
-          name: 'rate_limit_exceeded',
-          message: 'Too many requests. Please slow down.',
-          statusCode: 429,
-        },
-      }),
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  await assert.rejects(
-    async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
-    err => {
-      assert.equal(err.code, 'RESEND_RATE_LIMITED');
-      return true;
-    }
-  );
-});
-
-test('classifies network timeout when Resend API request times out', async () => {
-  const mockResend = {
-    emails: {
-      send: async () => {
-        const err = new Error('fetch failed: ETIMEDOUT');
-        err.code = 'ETIMEDOUT';
-        throw err;
-      },
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  await assert.rejects(
-    async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
-    err => {
-      assert.equal(err.code, 'RESEND_NETWORK_TIMEOUT');
-      return true;
-    }
-  );
-});
-
-test('prevents silent fallback to blocked SMTP ports on Render when RESEND_API_KEY is missing', async () => {
-  const prevRender = process.env.RENDER;
-  const prevResend = process.env.RESEND_API_KEY;
-  process.env.RENDER = 'true';
-  delete process.env.RESEND_API_KEY;
-
-  try {
-    const service = createWebinarEmailService();
-    await assert.rejects(
-      async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
-      err => {
-        assert.equal(err.code, 'RESEND_KEY_MISSING');
-        assert.match(err.message, /blocked on Render Free/);
-        return true;
-      }
-    );
-  } finally {
-    if (prevRender === undefined) delete process.env.RENDER;
-    else process.env.RENDER = prevRender;
-    if (prevResend === undefined) delete process.env.RESEND_API_KEY;
-    else process.env.RESEND_API_KEY = prevResend;
-  }
-});
-
-test('classifies HTTP 403 domain verification error from Resend as RESEND_DOMAIN_NOT_VERIFIED', async () => {
-  const mockResend = {
-    emails: {
-      send: async () => ({
-        data: null,
-        error: {
-          statusCode: 403,
-          message: 'The halalwealth.finance domain is not verified. Please, add and verify your domain on https://resend.com/domains',
-          name: 'application_error',
-        },
-      }),
-    },
-  };
-
-  const service = createWebinarEmailService({ resendClient: mockResend });
-  await assert.rejects(
-    async () => service.sendRegistrationConfirmation('user@example.com', 'Test User'),
-    err => {
-      assert.equal(err.code, 'RESEND_DOMAIN_NOT_VERIFIED');
-      return true;
-    }
-  );
-});
-
 test('resolves EMAIL_FROM and EMAIL_FROM_NAME correctly with formatted strings', () => {
   const { resolveSenderConfig } = require('./webinarEmailService');
   const env1 = {
@@ -596,54 +447,53 @@ test('resolves EMAIL_FROM and EMAIL_FROM_NAME correctly with formatted strings',
   assert.equal(res2.fromName, 'Custom Sender');
 });
 
-test('resolves EMAIL_PROVIDER resend and smtp explicitly and auto-detects on Render', () => {
+test('resolves EMAIL_PROVIDER to smtp', () => {
   const { resolveProviderConfig } = require('./webinarEmailService');
-  assert.equal(resolveProviderConfig({ EMAIL_PROVIDER: 'resend' }).provider, 'resend');
   assert.equal(resolveProviderConfig({ EMAIL_PROVIDER: 'smtp' }).provider, 'smtp');
-  assert.equal(resolveProviderConfig({ RENDER: 'true' }).provider, 'resend');
-  assert.equal(resolveProviderConfig({ RESEND_API_KEY: 're_123456789' }).provider, 'resend');
   assert.equal(resolveProviderConfig({}).provider, 'smtp');
 });
 
-test('blocks SMTP delivery on Render when EMAIL_PROVIDER=smtp without ALLOW_SMTP_ON_RENDER', async () => {
-  const prevRender = process.env.RENDER;
-  const prevProvider = process.env.EMAIL_PROVIDER;
-  process.env.RENDER = 'true';
-  process.env.EMAIL_PROVIDER = 'smtp';
+test('verifyEmailService reports EMAIL_CONFIG_INCOMPLETE when SMTP credentials are missing', async () => {
+  const service = createWebinarEmailService();
+  const prevHost = process.env.SMTP_HOST;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+  delete process.env.SMTP_HOST;
+  delete process.env.SMTP_USER;
+  delete process.env.SMTP_PASS;
 
   try {
-    const service = createWebinarEmailService();
-    await assert.rejects(
-      async () => service.sendRegistrationConfirmation('user@example.com', 'Test'),
-      err => {
-        assert.equal(err.code, 'RENDER_SMTP_PORT_BLOCKED');
-        assert.match(err.message, /blocked on Render Free/);
-        return true;
-      }
-    );
+    const result = await service.verifyEmailService();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'EMAIL_CONFIG_INCOMPLETE');
   } finally {
-    if (prevRender === undefined) delete process.env.RENDER;
-    else process.env.RENDER = prevRender;
-    if (prevProvider === undefined) delete process.env.EMAIL_PROVIDER;
-    else process.env.EMAIL_PROVIDER = prevProvider;
+    if (prevHost) process.env.SMTP_HOST = prevHost;
+    if (prevUser) process.env.SMTP_USER = prevUser;
+    if (prevPass) process.env.SMTP_PASS = prevPass;
   }
 });
 
-test('verifyEmailService reports RESEND_PUBLIC_DOMAIN_PROHIBITED for @gmail.com', async () => {
-  const prevKey = process.env.RESEND_API_KEY;
-  const prevFrom = process.env.EMAIL_FROM;
-  process.env.RESEND_API_KEY = 're_test_valid_key_123';
-  process.env.EMAIL_FROM = 'halalwealth2026@gmail.com';
+test('verifyEmailService verifies successfully with mock transporter', async () => {
+  let verified = false;
+  const mockCreateTransporter = () => ({
+    verify: async () => { verified = true; return true; },
+  });
+  const service = createWebinarEmailService({ createTransporter: mockCreateTransporter });
+  const prevHost = process.env.SMTP_HOST;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+  process.env.SMTP_HOST = 'smtp.hostinger.com';
+  process.env.SMTP_USER = 'info@halalwealth.finance';
+  process.env.SMTP_PASS = 'mockpass';
 
   try {
-    const service = createWebinarEmailService();
     const result = await service.verifyEmailService();
-    assert.equal(result.ok, false);
-    assert.equal(result.code, 'RESEND_PUBLIC_DOMAIN_PROHIBITED');
+    assert.equal(result.ok, true);
+    assert.equal(result.provider, 'Hostinger SMTP (Nodemailer)');
+    assert.equal(verified, true);
   } finally {
-    if (prevKey === undefined) delete process.env.RESEND_API_KEY;
-    else process.env.RESEND_API_KEY = prevKey;
-    if (prevFrom === undefined) delete process.env.EMAIL_FROM;
-    else process.env.EMAIL_FROM = prevFrom;
+    if (prevHost) process.env.SMTP_HOST = prevHost; else delete process.env.SMTP_HOST;
+    if (prevUser) process.env.SMTP_USER = prevUser; else delete process.env.SMTP_USER;
+    if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
   }
 });

@@ -34,6 +34,17 @@ const webinarRegistrationSchema = new mongoose.Schema({
   webinarVersion: { type: String, default: 'November 1, 2026 Webinar', trim: true },
   consent: { type: Boolean, default: true },
   status: { type: String, enum: ['New', 'Registered', 'Confirmed', 'Attended', 'Cancelled'], default: 'Registered' },
+  emailStatus: {
+    type: String,
+    enum: ['pending', 'accepted', 'delivered', 'failed', 'bounced', 'delivery_unknown'],
+    default: 'pending',
+  },
+  emailMessageId: { type: String, default: null, trim: true },
+  emailLastAttemptAt: { type: Date, default: null },
+  emailDeliveredAt: { type: Date, default: null },
+  emailAttemptCount: { type: Number, default: 0 },
+  emailLastError: { type: String, default: null },
+  emailProvider: { type: String, default: null, trim: true },
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
   confirmationEmailLastError: { type: String, default: null },
@@ -58,6 +69,8 @@ webinarRegistrationSchema.index({ createdAt: -1 });
 webinarRegistrationSchema.index({ status: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ registrationId: 1 });
 webinarRegistrationSchema.index({ referenceId: 1 }, { sparse: true });
+webinarRegistrationSchema.index({ emailMessageId: 1 }, { sparse: true });
+webinarRegistrationSchema.index({ emailStatus: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ feedbackEmailSent: 1 });
 webinarRegistrationSchema.index({ webinarVersion: 1, createdAt: -1 });
 webinarRegistrationSchema.index({ webinarId: 1, createdAt: -1 });

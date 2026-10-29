@@ -59,6 +59,7 @@ function filterRegistrationsByWebinar(registrations = [], targetWebinar) {
 }
 const CampaignConfig = require('../models/CampaignConfig');
 const webinarEmailService = require('../services/webinarEmailService');
+const { defaultBulkEmailService } = require('../services/bulkEmailService');
 
 const FEEDBACK_CAMPAIGN_KEY = 'post_webinar_feedback';
 const REGISTRATION_STATUSES = ['Registered', 'Confirmed', 'Attended', 'Cancelled'];
@@ -89,6 +90,21 @@ function buildRegistrationFilter(query = {}) {
   if (query.status) {
     if (!REGISTRATION_STATUSES.includes(query.status)) throw new Error('Invalid registration status.');
     filter.status = query.status === 'Registered' ? { $in: ['Registered', 'New', null] } : query.status;
+  }
+
+  if (query.emailStatus && query.emailStatus !== 'all') {
+    const cleanEmailStatus = String(query.emailStatus).trim().toLowerCase();
+    if (['pending', 'accepted', 'delivered', 'failed', 'bounced'].includes(cleanEmailStatus)) {
+      filter.emailStatus = cleanEmailStatus;
+    } else if (cleanEmailStatus === 'delivery_unknown' || cleanEmailStatus === 'unknown') {
+      filter.$or = [
+        { emailStatus: 'delivery_unknown' },
+        { emailStatus: null },
+        { emailStatus: { $exists: false } },
+      ];
+    } else {
+      throw new Error('Invalid email status filter.');
+    }
   }
 
   if (query.webinarId && query.webinarId !== 'all') {
@@ -201,7 +217,28 @@ function normalizeEmailTracking(registration = {}) {
   normalized.feedbackEmailSent = normalized.feedbackEmailSent === true;
   normalized.feedbackEmailSentAt = normalized.feedbackEmailSentAt || null;
   normalized.feedbackEmailLastError = normalized.feedbackEmailLastError || null;
-  normalized.emailStatus = normalizeEmailStatus(normalized);
+
+  const validTrackingStatuses = ['pending', 'accepted', 'delivered', 'failed', 'bounced', 'delivery_unknown'];
+  let resolvedEmailStatus = normalized.emailStatus;
+  if (!resolvedEmailStatus || !validTrackingStatuses.includes(resolvedEmailStatus)) {
+    if (resolvedEmailStatus === 'Sent' || normalized.confirmationEmailSent === true) {
+      resolvedEmailStatus = 'delivery_unknown';
+    } else if (resolvedEmailStatus === 'Failed' || normalized.confirmationEmailLastError) {
+      resolvedEmailStatus = 'failed';
+    } else {
+      resolvedEmailStatus = 'pending';
+    }
+  }
+  normalized.emailStatus = resolvedEmailStatus;
+  normalized.emailMessageId = normalized.emailMessageId || null;
+  normalized.emailLastAttemptAt = normalized.emailLastAttemptAt || normalized.confirmationEmailSentAt || null;
+  normalized.emailDeliveredAt = normalized.emailDeliveredAt || null;
+  normalized.emailAttemptCount = typeof normalized.emailAttemptCount === 'number'
+    ? normalized.emailAttemptCount
+    : (normalized.confirmationEmailSent ? 1 : 0);
+  normalized.emailLastError = normalized.emailLastError || normalized.confirmationEmailLastError || null;
+  normalized.emailProvider = normalized.emailProvider || null;
+
   normalized.announcementEmailStatus = normalizeAnnouncementStatus(normalized);
   normalized.joiningEmailStatus = normalizeJoiningStatus(normalized);
   normalized.feedbackEmailStatus = normalizeFeedbackStatus(normalized);
@@ -227,6 +264,7 @@ function createAdminRegistrationController({
   emailService = webinarEmailService,
   campaignConfigModel = CampaignConfig,
   webinarModel = Webinar,
+  bulkEmailService = defaultBulkEmailService,
 } = {}) {
   const safeLogger = {
     ...console,
@@ -234,6 +272,8 @@ function createAdminRegistrationController({
   };
   if (typeof safeLogger.info !== 'function') safeLogger.info = () => {};
   if (typeof safeLogger.error !== 'function') safeLogger.error = () => {};
+
+  const inFlightSends = new Set();
 
   function isValidId(id) {
     if (!id || typeof id !== 'string' || id === '[object Object]' || id.includes('[object')) return false;
@@ -248,7 +288,6 @@ function createAdminRegistrationController({
     }
     conditions.push(
       { _id: rawId },
-      { _id: { oid: rawId } },
       { registrationId: rawId },
       { referenceId: rawId },
     );
@@ -278,6 +317,7 @@ function createAdminRegistrationController({
             { _id: typeof id === 'object' ? id : { oid: rawId } },
             { _id: rawId },
             { registrationId: rawId },
+            { referenceId: rawId },
             { email: rawId },
           ],
         });
@@ -289,11 +329,14 @@ function createAdminRegistrationController({
 
   async function updateRegistrationRecord(id, update, fallbackDoc = null) {
     const lookup = buildRecordLookup(id);
+    const updateOp = (update && typeof update === 'object' && Object.keys(update).some(k => k.startsWith('$')))
+      ? update
+      : { $set: update };
     if (typeof registrationModel.findOneAndUpdate === 'function') {
       try {
         const updated = await registrationModel.findOneAndUpdate(
           lookup,
-          { $set: update },
+          updateOp,
           { new: true, runValidators: true },
         );
         if (updated) return maybeLean(updated);
@@ -303,7 +346,7 @@ function createAdminRegistrationController({
       try {
         const updated = await registrationModel.findByIdAndUpdate(
           id,
-          { $set: update },
+          updateOp,
           { new: true, runValidators: true },
         );
         if (updated) return maybeLean(updated);
@@ -317,10 +360,11 @@ function createAdminRegistrationController({
             { _id: typeof id === 'object' ? id : { oid: rawId } },
             { _id: rawId },
             { registrationId: rawId },
+            { referenceId: rawId },
             ...(fallbackDoc?.email ? [{ email: fallbackDoc.email }] : []),
           ],
         };
-        await registrationModel.collection.updateOne(filter, { $set: update });
+        await registrationModel.collection.updateOne(filter, updateOp);
         const refreshed = await registrationModel.collection.findOne(filter);
         if (refreshed) return refreshed;
       } catch (_) {}
@@ -383,12 +427,29 @@ function createAdminRegistrationController({
                 joiningSent: { $sum: { $cond: [{ $eq: ['$joiningEmailSent', true] }, 1, 0] } },
                 joiningPending: { $sum: { $cond: [{ $and: [{ $ne: ['$joiningEmailSent', true] }, { $eq: [{ $ifNull: ['$joiningEmailLastError', null] }, null] }] }, 1, 0] } },
                 joiningFailed: { $sum: { $cond: [{ $and: [{ $ne: ['$joiningEmailSent', true] }, { $ne: [{ $ifNull: ['$joiningEmailLastError', null] }, null] }] }, 1, 0] } },
+                deliveredEmails: { $sum: { $cond: [{ $eq: ['$emailStatus', 'delivered'] }, 1, 0] } },
+                acceptedEmails: { $sum: { $cond: [{ $eq: ['$emailStatus', 'accepted'] }, 1, 0] } },
+                failedEmails: { $sum: { $cond: [{ $in: ['$emailStatus', ['failed', 'bounced']] }, 1, 0] } },
+                pendingOrUnknownEmails: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $or: [
+                          { $in: [{ $ifNull: ['$emailStatus', 'pending'] }, ['pending', 'delivery_unknown']] },
+                          { $eq: [{ $ifNull: ['$emailStatus', null] }, null] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
               },
             }],
           },
         },
       ]);
-      const summary = result.summary?.[0] || { total: 0, today: 0, verified: 0, pending: 0, joiningSent: 0, joiningPending: 0, joiningFailed: 0 };
+      const summary = result.summary?.[0] || { total: 0, today: 0, verified: 0, pending: 0, joiningSent: 0, joiningPending: 0, joiningFailed: 0, deliveredEmails: 0, acceptedEmails: 0, failedEmails: 0, pendingOrUnknownEmails: 0 };
       const total = result.filteredTotal?.[0]?.count || 0;
       return res.json({
         data: (result.data || []).map(normalizeEmailTracking),
@@ -400,6 +461,10 @@ function createAdminRegistrationController({
           joiningSent: summary.joiningSent || 0,
           joiningPending: summary.joiningPending || 0,
           joiningFailed: summary.joiningFailed || 0,
+          deliveredEmails: summary.deliveredEmails || 0,
+          acceptedEmails: summary.acceptedEmails || 0,
+          failedEmails: summary.failedEmails || 0,
+          pendingOrUnknownEmails: summary.pendingOrUnknownEmails || 0,
         },
         pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
       });
@@ -424,10 +489,22 @@ function createAdminRegistrationController({
     }
   }
 
-  async function markConfirmationResult(registrationId, { success, errorMessage, email, fullName }) {
-    const update = success
-      ? { confirmationEmailSent: true, confirmationEmailSentAt: new Date(), confirmationEmailLastError: null }
-      : { confirmationEmailSent: false, confirmationEmailSentAt: null, confirmationEmailLastError: String(errorMessage || 'Email delivery failed.').slice(0, 500) };
+  async function markConfirmationResult(registrationId, { success, errorMessage, email, fullName, messageId, provider }) {
+    const isBounce = /bounce|suppressed|invalid recipient/i.test(errorMessage || '');
+    const status = success ? 'accepted' : (isBounce ? 'bounced' : 'failed');
+    const update = {
+      $set: {
+        confirmationEmailSent: Boolean(success),
+        confirmationEmailSentAt: success ? new Date() : null,
+        confirmationEmailLastError: success ? null : String(errorMessage || 'Email delivery failed.').slice(0, 500),
+        emailStatus: status,
+        emailLastAttemptAt: new Date(),
+        ...(messageId ? { emailMessageId: messageId } : {}),
+        ...(provider ? { emailProvider: provider } : {}),
+        emailLastError: success ? null : String(errorMessage || 'Email delivery failed.').slice(0, 500),
+      },
+      $inc: { emailAttemptCount: 1 },
+    };
 
     const updatedRegistration = await updateRegistrationRecord(registrationId, update, { email, fullName });
 
@@ -439,9 +516,10 @@ function createAdminRegistrationController({
     const mergedRegistration = {
       ...(plainRecord || {}),
       _id: rawId,
-      email: email || plainRecord.email,
-      fullName: fullName || plainRecord.fullName,
-      ...update,
+      email: email || plainRecord?.email,
+      fullName: fullName || plainRecord?.fullName,
+      ...update.$set,
+      emailAttemptCount: (plainRecord?.emailAttemptCount || 0) + 1,
     };
     return normalizeEmailTracking(normalizeStatus(mergedRegistration));
   }
@@ -538,53 +616,278 @@ function createAdminRegistrationController({
     if (!isValidId(req.params.id)) {
       return res.status(404).json({ message: 'Registration not found.' });
     }
+    const lockId = String(req.params.id);
+    if (inFlightSends.has(lockId)) {
+      return res.status(409).json({ success: false, message: 'An email is currently being sent to this recipient. Please wait for it to complete.' });
+    }
+    inFlightSends.add(lockId);
+
     try {
       const registration = await findRegistrationRecord(req.params.id);
       if (!registration) return res.status(404).json({ message: 'Registration not found.' });
       if (!registration.email) return res.status(400).json({ message: 'This registration does not have a valid email address.' });
 
-      await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
-      const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid) ? String(registration._id.oid) : (registration._id || req.params.id);
-      const updatedRegistration = await markConfirmationResult(regId, {
-        success: true,
-        email: registration.email,
-        fullName: registration.fullName,
-      });
-      safeLogger.info('Admin confirmation email sent.', { registrationId: regId, email: registration.email });
-      return res.json({ success: true, message: 'Confirmation email sent successfully.', data: updatedRegistration });
-    } catch (error) {
-      let updatedRegistration = null;
-      let email = null;
-      if (isValidId(req.params.id)) {
-        try {
-          const reg = await findRegistrationRecord(req.params.id);
-          if (reg) {
-            email = reg.email;
-            const regId = (reg._id && typeof reg._id === 'object' && reg._id.oid) ? String(reg._id.oid) : (reg._id || req.params.id);
-            updatedRegistration = await markConfirmationResult(regId, {
-              success: false,
-              errorMessage: error.message || 'Email could not be sent right now.',
-              email: reg.email,
-              fullName: reg.fullName,
-            });
-          }
-        } catch (dbError) {
-          safeLogger.error('Admin confirmation error tracking failed.', {
-            code: dbError.code || 'ADMIN_CONFIRMATION_TRACK_FAILED',
-            registrationId: req.params.id,
-          });
+      if (registration.emailStatus === 'bounced' && req.body?.force !== true) {
+        return res.status(400).json({ success: false, message: 'Cannot send email to a previously bounced address. Please verify or update the email address first.' });
+      }
+
+      if (registration.emailLastAttemptAt) {
+        const lastAttempt = new Date(registration.emailLastAttemptAt).getTime();
+        if (!Number.isNaN(lastAttempt) && Date.now() - lastAttempt < 3000) {
+          return res.status(429).json({ success: false, message: 'Please wait a moment before sending another email to this recipient.' });
         }
       }
+
+      let sendResult = null;
+      let emailError = null;
+
+      try {
+        sendResult = await emailService.sendRegistrationConfirmation(registration.email, registration.fullName);
+      } catch (err) {
+        emailError = err;
+      }
+
+      const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid) ? String(registration._id.oid) : (registration._id || req.params.id);
+
+      if (!emailError) {
+        const messageId = sendResult?.messageId || sendResult?.id || null;
+        const provider = 'smtp';
+        const updatedRegistration = await markConfirmationResult(regId, {
+          success: true,
+          email: registration.email,
+          fullName: registration.fullName,
+          messageId,
+          provider,
+        });
+        safeLogger.info('Admin confirmation email sent.', { registrationId: regId, email: registration.email, messageId });
+        return res.json({ success: true, message: 'Confirmation email sent successfully.', data: updatedRegistration });
+      }
+
       safeLogger.error('Admin confirmation email send failed.', {
-        code: error.code || 'ADMIN_EMAIL_SEND_FAILED',
+        code: emailError.code || 'ADMIN_EMAIL_SEND_FAILED',
         registrationId: req.params.id,
-        email,
+        email: registration.email,
       });
+
+      const updatedRegistration = await markConfirmationResult(regId, {
+        success: false,
+        errorMessage: emailError.message || 'Email could not be sent right now.',
+        email: registration.email,
+        fullName: registration.fullName,
+        provider: 'smtp',
+      });
+
       return res.status(200).json({
         success: false,
         message: 'Confirmation email could not be sent right now.',
         data: updatedRegistration,
       });
+    } finally {
+      inFlightSends.delete(lockId);
+    }
+  }
+
+  async function getBulkEmailPreview(req, res) {
+    try {
+      const webinarFilter = getWebinarTargetFilter(req);
+      const queryResult = typeof registrationModel.find === 'function'
+        ? (Object.keys(webinarFilter).length > 0 ? registrationModel.find(webinarFilter) : registrationModel.find())
+        : [];
+      let registrations = Array.isArray(queryResult)
+        ? queryResult
+        : (queryResult && typeof queryResult.sort === 'function' ? await queryResult.sort({ createdAt: -1 }) : await queryResult) || [];
+      registrations = maybeLean(registrations) || [];
+      const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+      registrations = filterRegistrationsByWebinar(registrations, targetWebinar);
+
+      let pending = 0;
+      let failed = 0;
+      let bounced = 0;
+      let alreadySent = 0;
+
+      for (const reg of registrations) {
+        const isSent = reg.confirmationEmailSent === true || reg.emailStatus === 'accepted' || reg.emailStatus === 'delivered';
+        if (reg.emailStatus === 'bounced') {
+          bounced += 1;
+        } else if (isSent) {
+          alreadySent += 1;
+        } else if (reg.emailStatus === 'failed' || reg.confirmationEmailLastError) {
+          failed += 1;
+        } else {
+          pending += 1;
+        }
+      }
+
+      const eligiblePendingAndFailed = pending + failed;
+      const total = registrations.length;
+
+      return res.json({
+        success: true,
+        counts: {
+          total,
+          eligible: eligiblePendingAndFailed,
+          pending,
+          failed,
+          alreadySent,
+          bounced,
+        },
+      });
+    } catch (err) {
+      safeLogger.error('Failed to compute bulk email preview.', { error: err.message });
+      return res.status(500).json({ success: false, message: 'Could not load bulk email preview.' });
+    }
+  }
+
+  async function startBulkEmailJob(req, res) {
+    const scope = req.body?.scope === 'all' ? 'all' : 'pending_failed';
+    const includeSent = req.body?.includeSent === true || scope === 'all';
+    const forceBounced = req.body?.forceBounced === true;
+    const targetWebinar = req.body?.webinarId || req.query?.webinarId;
+
+    // 1. Concurrency Check
+    if (bulkEmailService.isJobActive()) {
+      return res.status(409).json({
+        success: false,
+        message: 'A bulk email job is already running. Please wait for it to finish.',
+        activeJobId: bulkEmailService.getActiveJobId(),
+      });
+    }
+
+    // 2. SMTP Readiness Check
+    if (typeof emailService.verifyEmailService === 'function') {
+      try {
+        const verification = await emailService.verifyEmailService();
+        const isReady = verification?.ok === true || verification?.success === true;
+        if (!isReady) {
+          safeLogger.error('Bulk email rejected: SMTP verification failed.', { verification });
+          return res.status(503).json({
+            success: false,
+            message: `SMTP email service is not ready: ${verification?.errorMessage || verification?.message || 'Configuration incomplete'}. No emails were sent or modified.`,
+          });
+        }
+      } catch (verifyErr) {
+        safeLogger.error('Bulk email rejected: SMTP verification threw error.', { error: verifyErr.message });
+        return res.status(503).json({
+          success: false,
+          message: `SMTP connection failed: ${verifyErr.message}. No emails were sent or modified.`,
+        });
+      }
+    }
+
+    try {
+      const result = await bulkEmailService.startJob({
+        webinarId: targetWebinar,
+        scope,
+        includeSent,
+        forceBounced,
+        createdBy: req.admin?.email || 'admin',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: result.message || 'Bulk email job started.',
+        jobId: result.jobId,
+        total: result.total,
+        status: result.status,
+      });
+    } catch (err) {
+      if (err.message && err.message.includes('already running')) {
+        return res.status(409).json({
+          success: false,
+          message: err.message,
+        });
+      }
+      safeLogger.error('Failed to start bulk email job.', { error: err.message });
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Could not start bulk email job.',
+      });
+    }
+  }
+
+  async function getBulkEmailJobStatus(req, res) {
+    const { jobId } = req.params;
+    if (!jobId) {
+      return res.status(400).json({ success: false, message: 'Job ID is required.' });
+    }
+    try {
+      const job = await bulkEmailService.getJobStatus(jobId);
+      if (!job) {
+        return res.status(404).json({ success: false, message: 'Bulk email job not found.' });
+      }
+      return res.json({
+        success: true,
+        job: {
+          jobId: job.jobId,
+          type: job.type,
+          webinarId: job.webinarId,
+          scope: job.scope,
+          status: job.status,
+          total: job.total,
+          processed: job.processed,
+          accepted: job.accepted,
+          failed: job.failed,
+          skipped: job.skipped,
+          failedRecipients: job.failedRecipients || [],
+          errorMessage: job.errorMessage,
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          createdAt: job.createdAt,
+        },
+      });
+    } catch (err) {
+      safeLogger.error('Failed to retrieve bulk email job status.', { error: err.message });
+      return res.status(500).json({ success: false, message: 'Could not load job status.' });
+    }
+  }
+
+  async function getActiveBulkEmailJob(req, res) {
+    try {
+      const job = await bulkEmailService.getActiveJob();
+      if (!job) {
+        return res.json({ success: true, active: false, job: null });
+      }
+      return res.json({
+        success: true,
+        active: job.status === 'processing' || job.status === 'queued',
+        job: {
+          jobId: job.jobId,
+          type: job.type,
+          webinarId: job.webinarId,
+          scope: job.scope,
+          status: job.status,
+          total: job.total,
+          processed: job.processed,
+          accepted: job.accepted,
+          failed: job.failed,
+          skipped: job.skipped,
+          failedRecipients: job.failedRecipients || [],
+          errorMessage: job.errorMessage,
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          createdAt: job.createdAt,
+        },
+      });
+    } catch (err) {
+      safeLogger.error('Failed to retrieve active bulk email job.', { error: err.message });
+      return res.status(500).json({ success: false, message: 'Could not load active bulk email job.' });
+    }
+  }
+
+  async function cancelBulkEmailJob(req, res) {
+    const { jobId } = req.params;
+    if (!jobId) {
+      return res.status(400).json({ success: false, message: 'Job ID is required.' });
+    }
+    try {
+      const cancelled = await bulkEmailService.cancelJob(jobId);
+      return res.json({
+        success: Boolean(cancelled),
+        message: cancelled ? 'Job cancellation requested.' : 'Job could not be cancelled or was not found.',
+      });
+    } catch (err) {
+      safeLogger.error('Failed to cancel bulk email job.', { error: err.message });
+      return res.status(500).json({ success: false, message: 'Could not cancel job.' });
     }
   }
 
@@ -1335,6 +1638,11 @@ function createAdminRegistrationController({
       return res.status(404).json({ success: false, message: 'Registration not found.' });
     }
 
+    const lockId = String(req.params.id);
+    if (inFlightSends.has(lockId)) {
+      return res.status(409).json({ success: false, message: 'An email is currently being sent to this recipient. Please wait for it to complete.' });
+    }
+
     const { subject, message } = req.body || {};
     const cleanSubject = typeof subject === 'string' ? subject.trim() : '';
     const cleanMessage = typeof message === 'string' ? message.trim() : '';
@@ -1352,6 +1660,7 @@ function createAdminRegistrationController({
       return res.status(400).json({ success: false, message: 'Email message cannot exceed 10,000 characters.' });
     }
 
+    inFlightSends.add(lockId);
     try {
       const registration = await findRegistrationRecord(req.params.id);
       if (!registration) {
@@ -1361,20 +1670,63 @@ function createAdminRegistrationController({
         return res.status(400).json({ success: false, message: 'This registration does not have a valid email address.' });
       }
 
-      await emailService.sendCustomEmail(registration.email, {
-        subject: cleanSubject,
-        message: cleanMessage,
-        recipientName: registration.fullName,
-      });
+      if (registration.emailStatus === 'bounced' && req.body?.force !== true) {
+        return res.status(400).json({ success: false, message: 'Cannot send email to a previously bounced address. Please verify or update the email address first.' });
+      }
+
+      if (registration.emailLastAttemptAt) {
+        const lastAttempt = new Date(registration.emailLastAttemptAt).getTime();
+        if (!Number.isNaN(lastAttempt) && Date.now() - lastAttempt < 3000) {
+          return res.status(429).json({ success: false, message: 'Please wait a moment before sending another email to this recipient.' });
+        }
+      }
 
       const regId = (registration._id && typeof registration._id === 'object' && registration._id.oid)
         ? String(registration._id.oid)
         : (registration._id || req.params.id);
 
+      let sendResult;
+      try {
+        sendResult = await emailService.sendCustomEmail(registration.email, {
+          subject: cleanSubject,
+          message: cleanMessage,
+          recipientName: registration.fullName,
+        });
+      } catch (sendError) {
+        const isBounce = /bounce|suppressed|invalid recipient/i.test(sendError?.message || '');
+        await updateRegistrationRecord(regId, {
+          $set: {
+            emailStatus: isBounce ? 'bounced' : 'failed',
+            emailLastAttemptAt: new Date(),
+            emailProvider: 'smtp',
+            emailLastError: String(sendError.message || 'Custom email delivery failed.').slice(0, 500),
+          },
+          $inc: { emailAttemptCount: 1 },
+        }, registration).catch(() => {});
+        throw sendError;
+      }
+
+      const messageId = sendResult?.messageId || sendResult?.id || null;
+      const provider = 'smtp';
+
+      await updateRegistrationRecord(regId, {
+        $set: {
+          emailStatus: 'accepted',
+          emailMessageId: messageId,
+          emailLastAttemptAt: new Date(),
+          emailProvider: provider,
+          emailLastError: null,
+          confirmationEmailSent: true,
+          confirmationEmailSentAt: new Date(),
+        },
+        $inc: { emailAttemptCount: 1 },
+      }, registration).catch(() => {});
+
       safeLogger.info('Admin individual email sent successfully.', {
         registrationId: regId,
         email: registration.email,
         subject: cleanSubject,
+        messageId,
       });
 
       return res.json({
@@ -1384,6 +1736,8 @@ function createAdminRegistrationController({
           registrationId: regId,
           email: registration.email,
           fullName: registration.fullName,
+          emailMessageId: messageId,
+          emailStatus: 'accepted',
         },
       });
     } catch (error) {
@@ -1394,17 +1748,9 @@ function createAdminRegistrationController({
       });
 
       let userMessage = error.message || 'Failed to send email. Please check configuration and try again.';
-      if (error.code === 'RESEND_DOMAIN_NOT_VERIFIED' || /domain not verified|verify your domain/i.test(error.message)) {
-        userMessage = 'Email sending domain is not verified with Resend. Please verify DNS records for halalwealth.finance in the Resend dashboard or set RESEND_FROM to an authorized sender.';
-      } else if (error.code === 'RESEND_AUTH_FAILED' || /api key|unauthorized|forbidden/i.test(error.message)) {
-        userMessage = 'Resend API authentication failed. Please verify your RESEND_API_KEY environment variable.';
-      } else if (error.code === 'RESEND_RATE_LIMITED' || /rate limit/i.test(error.message)) {
-        userMessage = 'Email rate limit exceeded. Please wait a moment and try again.';
-      } else if (error.code === 'RESEND_KEY_MISSING' || /resend_api_key/i.test(error.message)) {
-        userMessage = 'Outbound SMTP is blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.';
-      } else if (/smtp connection timed out/i.test(error.message)) {
+      if (/smtp connection timed out/i.test(error.message)) {
         userMessage = 'SMTP connection timed out. Hostinger SMTP server could not be reached within the timeout limit. Please verify network connectivity or try again.';
-      } else if (error.code === 'RESEND_NETWORK_TIMEOUT' || error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT' || /timeout|timed out/i.test(error.message)) {
+      } else if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKETTIMEDOUT' || /timeout|timed out/i.test(error.message)) {
         userMessage = 'Email delivery timed out. Please check network connectivity and try again.';
       } else if (error.code === 'EAUTH' || /auth|authentication/i.test(error.message)) {
         userMessage = 'Email authentication failed. Please check your credentials.';
@@ -1414,6 +1760,8 @@ function createAdminRegistrationController({
         success: false,
         message: userMessage,
       });
+    } finally {
+      inFlightSends.delete(lockId);
     }
   }
 
@@ -1449,7 +1797,7 @@ function createAdminRegistrationController({
       res.setHeader('Cache-Control', 'no-store');
       if (!res.write(`${columns.map(csvCell).join(',')}\r\n`)) await once(res, 'drain');
       for await (const registration of cursor) {
-        const record = normalizeStatus(registration);
+        const record = normalizeEmailTracking(normalizeStatus(registration));
         record.referenceId = record.referenceId || record.registrationId || String(record._id);
         if (!res.write(`${columns.map(field => csvCell(record[field])).join(',')}\r\n`)) await once(res, 'drain');
       }
@@ -1578,6 +1926,11 @@ function createAdminRegistrationController({
     sendConfirmation,
     sendBulkConfirmations,
     resendBulkConfirmations,
+    getBulkEmailPreview,
+    startBulkEmailJob,
+    getBulkEmailJobStatus,
+    getActiveBulkEmailJob,
+    cancelBulkEmailJob,
     sendPostponementAnnouncement,
     sendBulkPostponementAnnouncements,
     resendBulkPostponementAnnouncements,

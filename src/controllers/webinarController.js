@@ -168,6 +168,13 @@ function createWebinarRegistrationHandler({
         webinarId,
         webinarVersion,
         consent,
+        emailStatus: 'pending',
+        emailMessageId: null,
+        emailLastAttemptAt: null,
+        emailDeliveredAt: null,
+        emailAttemptCount: 0,
+        emailLastError: null,
+        emailProvider: null,
       };
 
       const validation = validateWebinarRegistration(payload);
@@ -249,6 +256,7 @@ function createWebinarRegistrationHandler({
 
         let confirmationEmailSent = false;
         let joiningEmailSent = false;
+        let sendResult = null;
 
         function isRetryable(err) {
           const code = String(err?.code || '').toUpperCase();
@@ -257,22 +265,16 @@ function createWebinarRegistrationHandler({
             code === 'INVALID_RECIPIENT_EMAIL' ||
             code === 'SMTP_AUTH_FAILED' ||
             code === 'EAUTH' ||
-            code === 'RESEND_KEY_MISSING' ||
-            code === 'RESEND_KEY_INVALID' ||
-            code === 'RESEND_AUTH_FAILED' ||
-            code === 'RESEND_DOMAIN_NOT_VERIFIED' ||
-            code === 'RESEND_PUBLIC_DOMAIN_PROHIBITED' ||
-            code === 'EMAIL_CONFIG_INCOMPLETE' ||
-            code === 'RENDER_SMTP_PORT_BLOCKED'
+            code === 'EMAIL_CONFIG_INCOMPLETE'
           ) {
             return false;
           }
-          return code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'ECONNRESET' || code === 'RESEND_NETWORK_TIMEOUT' || code === 'RESEND_RATE_LIMITED' || /timeout/i.test(msg);
+          return code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || code === 'ECONNRESET' || /timeout/i.test(msg);
         }
 
         async function attemptSend() {
           if (typeof emailService.sendRegistrationConfirmation === 'function') {
-            await emailService.sendRegistrationConfirmation(registration.email, registration.fullName, {
+            sendResult = await emailService.sendRegistrationConfirmation(registration.email, registration.fullName, {
               includeEventDetails: true,
               topic: 'Halal Trade, Investments & Generational Wealth',
               date: 'Sunday, November 1, 2026',
@@ -280,7 +282,7 @@ function createWebinarRegistrationHandler({
             });
             confirmationEmailSent = true;
           } else if (typeof emailService.sendZoomJoiningLink === 'function') {
-            await emailService.sendZoomJoiningLink(registration.email, registration.fullName);
+            sendResult = await emailService.sendZoomJoiningLink(registration.email, registration.fullName);
             joiningEmailSent = true;
             confirmationEmailSent = true;
           }
@@ -303,6 +305,9 @@ function createWebinarRegistrationHandler({
             }
           }
 
+          const messageId = sendResult?.messageId || sendResult?.id || null;
+          const provider = 'smtp';
+
           if (typeof registrationModel.findByIdAndUpdate === 'function') {
             await registrationModel.findByIdAndUpdate(
               registration._id,
@@ -314,13 +319,23 @@ function createWebinarRegistrationHandler({
                   confirmationEmailSent: confirmationEmailSent || false,
                   confirmationEmailSentAt: confirmationEmailSent ? new Date() : null,
                   confirmationEmailLastError: null,
+                  emailStatus: 'accepted',
+                  emailMessageId: messageId,
+                  emailLastAttemptAt: new Date(),
+                  emailProvider: provider,
+                  emailLastError: null,
                 },
+                $inc: { emailAttemptCount: 1 },
               },
               { new: true, runValidators: true },
             );
           }
-          return { success: true, confirmationEmailSent, joiningEmailSent };
+          return { success: true, confirmationEmailSent, joiningEmailSent, emailStatus: 'accepted', messageId };
         } catch (error) {
+          const isBounce = /bounce|suppressed|invalid recipient/i.test(error?.message || '') || error?.code === 'INVALID_RECIPIENT_EMAIL';
+          const failedStatus = isBounce ? 'bounced' : 'failed';
+          const provider = 'smtp';
+
           safeLogger.error('Webinar registration confirmation email failed.', {
             code: error.code || 'EMAIL_SEND_FAILED',
             message: error.message || 'Unknown email failure',
@@ -337,7 +352,12 @@ function createWebinarRegistrationHandler({
                   confirmationEmailSent: false,
                   confirmationEmailSentAt: null,
                   confirmationEmailLastError: String(error.message || 'Email delivery failed.').slice(0, 500),
+                  emailStatus: failedStatus,
+                  emailLastAttemptAt: new Date(),
+                  emailProvider: provider,
+                  emailLastError: String(error.message || 'Email delivery failed.').slice(0, 500),
                 },
+                $inc: { emailAttemptCount: 1 },
               },
               { new: true, runValidators: true },
             ).catch(() => {});

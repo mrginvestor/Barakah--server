@@ -1,14 +1,12 @@
 /**
  * Halal Wealth Summit / Webinar — Email Service Diagnostic Tool
  *
- * Verifies email service configuration (Hostinger SMTP or Resend HTTP API),
+ * Verifies email service configuration (Hostinger SMTP via Nodemailer),
  * tests connection/authentication, and optionally submits a controlled test email.
  *
  * Usage:
  *   node server/scripts/test-email-diagnostic.js
- *   node server/scripts/test-email-diagnostic.js --provider resend
  *   node server/scripts/test-email-diagnostic.js --send test@example.com
- *   node server/scripts/test-email-diagnostic.js --provider resend --send test@example.com
  */
 
 const path = require('path');
@@ -17,12 +15,7 @@ const dotenv = require('dotenv');
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config();
 
-// Parse CLI flags before running diagnostics
 const args = process.argv.slice(2);
-const providerFlagIndex = args.indexOf('--provider');
-if (providerFlagIndex !== -1 && args[providerFlagIndex + 1]) {
-  process.env.EMAIL_PROVIDER = args[providerFlagIndex + 1].trim().toLowerCase();
-}
 
 const { verifyEmailService, createWebinarEmailService, resolveSenderConfig, resolveProviderConfig } = require('../src/services/webinarEmailService');
 
@@ -45,13 +38,11 @@ async function runDiagnostic() {
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Node.js: ${process.version}`);
   console.log(`Platform: ${process.platform}`);
-  console.log(`Hosting Environment: ${process.env.RENDER ? 'Render (RENDER=true detected)' : 'Local / Non-Render'}`);
   console.log('----------------------------------------------------------------');
 
   // 1. Audit Environment Variables (without exposing secrets)
   console.log('\n[1/3] Auditing Email Environment Variables...');
-  const resendApiKey = process.env.RESEND_API_KEY;
-  const emailProvider = process.env.EMAIL_PROVIDER || '[AUTO-DETECTED]';
+  const emailProvider = process.env.EMAIL_PROVIDER || 'smtp';
   const senderConfig = resolveSenderConfig(process.env);
   const providerConfig = resolveProviderConfig(process.env);
 
@@ -62,7 +53,6 @@ async function runDiagnostic() {
   const smtpPass = process.env.SMTP_PASS || process.env.MAIL_PASSWORD || process.env.MAIL_PASS;
 
   console.log(`  EMAIL_PROVIDER:       ${emailProvider} (Resolved: ${providerConfig.provider})`);
-  console.log(`  RESEND_API_KEY:       ${maskSecret(resendApiKey)}`);
   console.log(`  EMAIL_FROM:           ${senderConfig.fromAddress}`);
   console.log(`  EMAIL_FROM_NAME:      ${senderConfig.fromName}`);
   console.log(`  EMAIL_REPLY_TO:       ${senderConfig.replyToAddress}`);
@@ -71,11 +61,7 @@ async function runDiagnostic() {
   console.log(`  SMTP_SECURE:          ${smtpSecure || '[DEFAULT: true]'}`);
   console.log(`  SMTP_USER:            ${maskEmail(smtpUser)}`);
   console.log(`  SMTP_PASS:            ${maskSecret(smtpPass)}`);
-
-  const activeProvider = providerConfig.useResend
-    ? 'Resend HTTP API (HTTPS port 443)'
-    : 'Hostinger SMTP (Nodemailer)';
-  console.log(`\n  Active Provider Selected: ${activeProvider}`);
+  console.log('\n  Active Provider Selected: Hostinger SMTP (Nodemailer)');
 
   // 2. Connectivity & Authentication Verification
   console.log('\n[2/3] Testing Connection & Authentication...');
@@ -96,12 +82,6 @@ async function runDiagnostic() {
     console.error(`  Category:       ${diagnostic.errorCategory}`);
     console.error(`  Message:        ${diagnostic.errorMessage}`);
     if (diagnostic.host) console.error(`  Host/Port:      ${diagnostic.host}:${diagnostic.port}`);
-
-    if (diagnostic.code === 'RENDER_FREE_PORT_BLOCKED' || (process.env.RENDER && diagnostic.provider.includes('SMTP'))) {
-      console.error('\n  [ACTION REQUIRED FOR RENDER]:');
-      console.error('  Render Free blocks outbound TCP on ports 25, 465, and 587.');
-      console.error('  To fix: Set RESEND_API_KEY in Render dashboard environment variables for HTTPS port 443 delivery.');
-    }
   }
 
   // 3. Optional Controlled Test Email Submission
@@ -122,7 +102,7 @@ async function runDiagnostic() {
       const emailService = createWebinarEmailService();
       const testResult = await emailService.sendCustomEmail(targetEmail, {
         subject: `[Diagnostic] Halal Wealth Webinar Test - ${new Date().toISOString()}`,
-        message: 'This is a controlled diagnostic test verifying email delivery from Halal Wealth Webinar.',
+        message: 'This is a controlled diagnostic test verifying email delivery from Halal Wealth Webinar via Hostinger SMTP.',
         recipientName: 'Administrator / Tester',
       });
 
@@ -130,26 +110,11 @@ async function runDiagnostic() {
       console.log(`  Message ID:   ${testResult.messageId || testResult.id || 'N/A'}`);
       console.log(`  Response:     ${testResult.response || 'Accepted by provider'}`);
       console.log(`  Accepted:     ${JSON.stringify(testResult.accepted || [targetEmail])}`);
-      console.log('  NOTE: Message accepted by mail server/API for queuing. Delivery to inbox depends on recipient MTA.');
+      console.log('  NOTE: Message accepted by mail server for queuing.');
     } catch (testError) {
       console.error('  TEST EMAIL FAILED:');
       console.error(`  Error Code:   ${testError.code || 'UNKNOWN'}`);
       console.error(`  Message:      ${testError.message}`);
-
-      if (testError.code === 'RESEND_DOMAIN_NOT_VERIFIED') {
-        console.error('\n  [DOMAIN VERIFICATION REQUIRED]:');
-        console.error('  The domain in EMAIL_FROM is not verified on Resend.');
-        console.error('  1. Go to https://resend.com/domains');
-        console.error('  2. Add your sending domain (e.g., halalwealth.finance)');
-        console.error('  3. Add the DKIM and SPF TXT records to your DNS provider (e.g. Hostinger / Cloudflare).');
-        console.error('  4. For immediate testing prior to domain verification, set EMAIL_FROM=onboarding@resend.dev');
-        console.error('     and send only to your Resend account email.');
-      } else if (testError.code === 'RESEND_PUBLIC_DOMAIN_PROHIBITED') {
-        console.error('\n  [PUBLIC DOMAIN NOT PERMITTED]:');
-        console.error('  Resend prohibits sending from public webmail domains like @gmail.com.');
-        console.error('  Please use your custom domain address (e.g. info@halalwealth.finance).');
-      }
-
       process.exit(1);
     }
   } else {

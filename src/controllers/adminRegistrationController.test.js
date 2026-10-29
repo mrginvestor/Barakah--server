@@ -826,26 +826,307 @@ test('sendIndividualEmail handles participant not found and SMTP failure safely'
   assert.equal(resError.body.success, false);
   assert.match(resError.body.message, /SMTP connection timed out/);
 
-  // 3. Resend unverified domain handling
-  const domainError = new Error('The domain is not verified');
-  domainError.code = 'RESEND_DOMAIN_NOT_VERIFIED';
-  const controllerDomainError = createAdminRegistrationController({
+  // 3. SMTP authentication failure handling
+  const authError = new Error('Invalid login: 535 Authentication failed');
+  authError.code = 'EAUTH';
+  const controllerAuthError = createAdminRegistrationController({
     registrationModel: {
       findOne: async () => ({ _id: 'reg-999', email: 'fail@example.com', fullName: 'Fail User' }),
     },
     emailService: {
-      sendCustomEmail: async () => { throw domainError; },
+      sendCustomEmail: async () => { throw authError; },
     },
     logger: createLogger(),
   });
 
-  const resDomainError = createResponse();
-  await controllerDomainError.sendIndividualEmail({
+  const resAuthError = createResponse();
+  await controllerAuthError.sendIndividualEmail({
     params: { id: 'reg-999' },
     body: { subject: 'Test Subject', message: 'Test Message' },
-  }, resDomainError);
+  }, resAuthError);
 
-  assert.equal(resDomainError.statusCode, 500);
-  assert.equal(resDomainError.body.success, false);
-  assert.match(resDomainError.body.message, /domain is not verified with Resend/i);
+  assert.equal(resAuthError.statusCode, 500);
+  assert.equal(resAuthError.body.success, false);
+  assert.match(resAuthError.body.message, /Email authentication failed/i);
 });
+
+test('buildRegistrationFilter handles emailStatus filters and rejects invalid ones', () => {
+  const filterDelivered = buildRegistrationFilter({ emailStatus: 'delivered' });
+  assert.equal(filterDelivered.emailStatus, 'delivered');
+
+  const filterAccepted = buildRegistrationFilter({ emailStatus: 'accepted' });
+  assert.equal(filterAccepted.emailStatus, 'accepted');
+
+  const filterUnknown = buildRegistrationFilter({ emailStatus: 'delivery_unknown' });
+  assert.ok(Array.isArray(filterUnknown.$or));
+  assert.equal(filterUnknown.$or[0].emailStatus, 'delivery_unknown');
+
+  assert.throws(() => buildRegistrationFilter({ emailStatus: 'not_a_real_status' }), /Invalid email status filter/);
+});
+
+test('list summary aggregates delivered, accepted, failed, and pending/untracked email counts', async () => {
+  const registrationModel = {
+    aggregate: async () => [{
+      data: [{ _id: 'r1', fullName: 'Test', emailStatus: 'delivered' }],
+      filteredTotal: [{ count: 1 }],
+      summary: [{
+        total: 10,
+        today: 2,
+        verified: 8,
+        pending: 2,
+        deliveredEmails: 5,
+        acceptedEmails: 2,
+        failedEmails: 1,
+        pendingOrUnknownEmails: 2,
+      }],
+    }],
+  };
+  const controller = createAdminRegistrationController({ registrationModel, logger: createLogger() });
+  const response = createResponse();
+
+  await controller.list({ query: {} }, response);
+
+  assert.equal(response.body.summary.deliveredEmails, 5);
+  assert.equal(response.body.summary.acceptedEmails, 2);
+  assert.equal(response.body.summary.failedEmails, 1);
+  assert.equal(response.body.summary.pendingOrUnknownEmails, 2);
+});
+
+test('sendConfirmation prevents concurrent double-send with 409 conflict', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => ({ _id: 'reg-slow', email: 'slow@example.com', fullName: 'Slow User' }),
+      findByIdAndUpdate: async (_id, update) => ({ _id, ...update.$set }),
+    },
+    emailService: {
+      sendRegistrationConfirmation: async () => {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        return { status: 'RESEND_ACCEPTED', id: 'resend-123' };
+      },
+    },
+    logger: createLogger(),
+  });
+
+  const res1 = createResponse();
+  const res2 = createResponse();
+
+  const p1 = controller.sendConfirmation({ params: { id: 'reg-slow' } }, res1);
+  const p2 = controller.sendConfirmation({ params: { id: 'reg-slow' } }, res2);
+
+  await Promise.all([p1, p2]);
+
+  assert.equal(res2.statusCode, 409);
+  assert.match(res2.body.message, /currently being sent/i);
+  assert.equal(res1.statusCode, 200);
+});
+
+test('sendConfirmation blocks rapid repeat send under 3 seconds with 429', async () => {
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => ({
+        _id: 'reg-recent',
+        email: 'recent@example.com',
+        fullName: 'Recent User',
+        emailLastAttemptAt: new Date(), // Just now
+      }),
+    },
+    emailService: {
+      sendRegistrationConfirmation: async () => ({ id: 'resend-recent' }),
+    },
+    logger: createLogger(),
+  });
+
+  const res = createResponse();
+  await controller.sendConfirmation({ params: { id: 'reg-recent' } }, res);
+
+  assert.equal(res.statusCode, 429);
+  assert.match(res.body.message, /wait a moment/i);
+});
+
+test('sendConfirmation blocks bounced address unless forced', async () => {
+  let emailSent = false;
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      findById: async () => ({
+        _id: 'reg-bounced',
+        email: 'bounced@example.com',
+        fullName: 'Bounced User',
+        emailStatus: 'bounced',
+      }),
+      findByIdAndUpdate: async (_id, update) => ({ _id, ...update.$set }),
+    },
+    emailService: {
+      sendRegistrationConfirmation: async () => {
+        emailSent = true;
+        return { id: 'resend-forced' };
+      },
+    },
+    logger: createLogger(),
+  });
+
+  // Blocked when force is not true
+  const resBlocked = createResponse();
+  await controller.sendConfirmation({ params: { id: 'reg-bounced' } }, resBlocked);
+  assert.equal(resBlocked.statusCode, 400);
+  assert.match(resBlocked.body.message, /previously bounced address/i);
+  assert.equal(emailSent, false);
+
+  // Allowed when force is true
+  const resForced = createResponse();
+  await controller.sendConfirmation({ params: { id: 'reg-bounced' }, body: { force: true } }, resForced);
+  assert.equal(resForced.statusCode, 200);
+  assert.equal(emailSent, true);
+});
+
+test('getBulkEmailPreview computes accurate counts for eligible, pending, failed, and already sent', async () => {
+  const registrations = [
+    { _id: '1', emailStatus: 'pending', confirmationEmailSent: false },
+    { _id: '2', emailStatus: 'failed', confirmationEmailLastError: 'Error' },
+    { _id: '3', emailStatus: 'accepted', confirmationEmailSent: true },
+    { _id: '4', emailStatus: 'delivered', confirmationEmailSent: true },
+    { _id: '5', emailStatus: 'bounced' },
+  ];
+
+  const controller = createAdminRegistrationController({
+    registrationModel: {
+      find: () => ({ sort: async () => registrations }),
+    },
+    logger: createLogger(),
+  });
+
+  const res = createResponse();
+  await controller.getBulkEmailPreview({ query: {} }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.counts.total, 5);
+  assert.equal(res.body.counts.pending, 1);
+  assert.equal(res.body.counts.failed, 1);
+  assert.equal(res.body.counts.alreadySent, 2);
+  assert.equal(res.body.counts.bounced, 1);
+  assert.equal(res.body.counts.eligible, 2); // 1 pending + 1 failed
+});
+
+test('startBulkEmailJob checks SMTP readiness and prevents concurrent bulk jobs', async () => {
+  let smtpVerified = false;
+  let jobStarted = false;
+
+  const mockBulkEmailService = {
+    isJobActive: () => false,
+    getActiveJobId: () => null,
+    startJob: async () => {
+      jobStarted = true;
+      return { jobId: 'job-123', total: 10, status: 'queued' };
+    },
+  };
+
+  const failingEmailService = {
+    verifyEmailService: async () => ({ success: false, message: 'Invalid SMTP password' }),
+  };
+
+  const workingEmailService = {
+    verifyEmailService: async () => {
+      smtpVerified = true;
+      return { success: true };
+    },
+  };
+
+  // 1. Rejects if SMTP fails verification
+  const controllerWithFailingSMTP = createAdminRegistrationController({
+    emailService: failingEmailService,
+    bulkEmailService: mockBulkEmailService,
+    logger: createLogger(),
+  });
+
+  const resFailingSMTP = createResponse();
+  await controllerWithFailingSMTP.startBulkEmailJob({ body: {} }, resFailingSMTP);
+  assert.equal(resFailingSMTP.statusCode, 503);
+  assert.match(resFailingSMTP.body.message, /SMTP email service is not ready/);
+  assert.equal(jobStarted, false);
+
+  // 2. Succeeds when SMTP is ready
+  const controllerWithWorkingSMTP = createAdminRegistrationController({
+    emailService: workingEmailService,
+    bulkEmailService: mockBulkEmailService,
+    logger: createLogger(),
+  });
+
+  const resSuccess = createResponse();
+  await controllerWithWorkingSMTP.startBulkEmailJob({ body: { scope: 'pending_failed' } }, resSuccess);
+  assert.equal(resSuccess.statusCode, 200);
+  assert.equal(resSuccess.body.success, true);
+  assert.equal(resSuccess.body.jobId, 'job-123');
+  assert.equal(smtpVerified, true);
+  assert.equal(jobStarted, true);
+
+  // 3. Blocks concurrent running job with 409 Conflict
+  const activeBulkEmailService = {
+    isJobActive: () => true,
+    getActiveJobId: () => 'job-active-999',
+  };
+
+  const controllerWithActiveJob = createAdminRegistrationController({
+    emailService: workingEmailService,
+    bulkEmailService: activeBulkEmailService,
+    logger: createLogger(),
+  });
+
+  const resConflict = createResponse();
+  await controllerWithActiveJob.startBulkEmailJob({ body: {} }, resConflict);
+  assert.equal(resConflict.statusCode, 409);
+  assert.match(resConflict.body.message, /already running/);
+});
+
+test('getBulkEmailJobStatus, getActiveBulkEmailJob, and cancelBulkEmailJob operate correctly', async () => {
+  const mockJob = {
+    jobId: 'job-abc',
+    status: 'processing',
+    total: 20,
+    processed: 5,
+    accepted: 5,
+    failed: 0,
+    skipped: 0,
+    failedRecipients: [],
+  };
+
+  let cancelRequested = false;
+  const mockBulkEmailService = {
+    getJobStatus: async (id) => (id === 'job-abc' ? mockJob : null),
+    getActiveJob: async () => mockJob,
+    cancelJob: async (id) => {
+      cancelRequested = true;
+      return true;
+    },
+  };
+
+  const controller = createAdminRegistrationController({
+    bulkEmailService: mockBulkEmailService,
+    logger: createLogger(),
+  });
+
+  // getBulkEmailJobStatus
+  const statusRes = createResponse();
+  await controller.getBulkEmailJobStatus({ params: { jobId: 'job-abc' } }, statusRes);
+  assert.equal(statusRes.statusCode, 200);
+  assert.equal(statusRes.body.job.processed, 5);
+
+  const missingRes = createResponse();
+  await controller.getBulkEmailJobStatus({ params: { jobId: 'not-found' } }, missingRes);
+  assert.equal(missingRes.statusCode, 404);
+
+  // getActiveBulkEmailJob
+  const activeRes = createResponse();
+  await controller.getActiveBulkEmailJob({}, activeRes);
+  assert.equal(activeRes.statusCode, 200);
+  assert.equal(activeRes.body.active, true);
+  assert.equal(activeRes.body.job.jobId, 'job-abc');
+
+  // cancelBulkEmailJob
+  const cancelRes = createResponse();
+  await controller.cancelBulkEmailJob({ params: { jobId: 'job-abc' } }, cancelRes);
+  assert.equal(cancelRes.statusCode, 200);
+  assert.equal(cancelRes.body.success, true);
+  assert.equal(cancelRequested, true);
+});
+
+

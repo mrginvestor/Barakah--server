@@ -1,12 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
-let Resend;
-try {
-  Resend = require('resend').Resend;
-} catch (_) {
-  Resend = null;
-}
 
 const SENDER_EMAIL = 'info@halalwealth.finance';
 const POSTER_CID = 'webinar-poster';
@@ -35,9 +29,9 @@ WhatsApp Community: https://chat.whatsapp.com/I9d41QdjbOGA43kYph2noq
 YouTube: youtube.com/@ethicalfinancebasithtamil
 
 Instagram: instagram.com/ethicalfinancebasith.tamil`;
-const ZOOM_LINK = 'https://us06web.zoom.us/j/81487983324?pwd=iiWszjuBKKDHZ7SNibjY9aUkfFVEvS.1';
-const ZOOM_MEETING_ID = '814 8798 3324';
-const ZOOM_PASSCODE = '666991';
+const ZOOM_LINK = 'https://us06web.zoom.us/j/85209088582?pwd=AWat7mNEiXKc5rSKERpz95n9QaFfbQ.1';
+const ZOOM_MEETING_ID = '852 0908 8582';
+const ZOOM_PASSCODE = '315170';
 
 function readFirstDefined(environment, keys) {
   for (const key of keys) {
@@ -64,20 +58,45 @@ function buildRegistrationConfirmation(recipientName, posterAttachmentPath = nul
   const posterImage = posterAttachmentPath ? `<img src="cid:${POSTER_CID}" alt="Halal Wealth Webinar poster" style="display:block;width:100%;max-width:550px;height:auto;border:0;margin:0 auto 24px;" />` : '';
 
   const hasCustomDetails = Boolean(options && (options.topic || options.date || options.time || options.includeEventDetails));
-  const topic = options?.topic || 'Halal Trade, Investments & Generational Wealth';
+  const topic = options?.topic || 'Halal Investments & Retirement Planning';
   const eventDate = options?.date || 'Sunday, November 1, 2026';
   const eventTime = options?.time || '11:00 AM IST (1:30 PM SG | 9:30 AM UAE | 8:30 AM KSA)';
 
+  const zoomLink = options?.zoomLink || ZOOM_LINK;
+  const zoomMeetingId = options?.meetingId || ZOOM_MEETING_ID;
+  const zoomPasscode = options?.passcode || ZOOM_PASSCODE;
+  const hasZoomLink = Boolean(options && (options.includeZoomLink || options.zoomLink || options.includeEventDetails));
+
   const detailsText = hasCustomDetails
     ? `\n\nEvent: Halal Wealth Webinar\nTopic: ${topic}\nDate: ${eventDate}\nTime: ${eventTime}\n`
+    : '';
+
+  const zoomText = hasZoomLink
+    ? `\n\nZoom Meeting Link: ${zoomLink}\nMeeting ID: ${zoomMeetingId}\nPasscode: ${zoomPasscode}\n`
+    : '';
+
+  const zoomHtml = hasZoomLink
+    ? `
+                <div style="background-color:#082b49;color:#ffffff;padding:20px 20px;margin:20px 0;border-radius:10px;text-align:center;">
+                  <p style="margin:0 0 10px;font-size:15px;font-weight:700;color:#ffffff;">Join Zoom Meeting:</p>
+                  <p style="margin:0 0 12px;">
+                    <a href="${zoomLink}" style="display:inline-block;background-color:#d4af5a;color:#082b49;font-weight:700;font-size:14px;padding:10px 20px;border-radius:6px;text-decoration:none;">Click Here to Join Zoom Webinar</a>
+                  </p>
+                  <p style="margin:0 0 8px;font-size:12px;color:#e6c875;word-break:break-all;">
+                    <a href="${zoomLink}" style="color:#e6c875;text-decoration:underline;">${zoomLink}</a>
+                  </p>
+                  <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15);font-size:13px;">
+                    <span style="color:#ffffff;margin-right:16px;">Meeting ID: <strong style="color:#d4af5a;">${zoomMeetingId}</strong></span>
+                    <span style="color:#ffffff;">Passcode: <strong style="color:#d4af5a;">${zoomPasscode}</strong></span>
+                  </div>
+                </div>`
     : '';
 
   const text = `Dear ${recipientName},
 
 Assalamu Alaikum warahmatullahi wabarakatuh!
 
-Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${detailsText}${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.
-
+Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${detailsText}${zoomText}${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}
 In the meantime, stay connected with us to learn more about Islamic finance and Halal investments:
 
 YouTube: https://youtube.com/@ethicalfinancebasithtamil
@@ -117,14 +136,14 @@ Halal Wealth Webinar Team`;
                   <p style="margin:0 0 6px;font-weight:700;color:#0e2d3d;">Date: <span style="font-weight:400;color:#243746;">${escapeHtml(eventDate)}</span></p>
                   <p style="margin:0;font-weight:700;color:#0e2d3d;">Time: <span style="font-weight:400;color:#243746;">${escapeHtml(eventTime)}</span></p>
                 </div>` : ''}
+                ${zoomHtml}
                 ${posterImage}
-                <p style="margin:0 0 16px;">We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.</p>
                 <p style="margin:0 0 18px;">In the meantime, stay connected with us to learn more about Islamic finance and Halal investments:</p>
                 <p style="margin:0 0 8px;"><a href="https://youtube.com/@ethicalfinancebasithtamil" style="color:#0d5c7d;text-decoration:none;">YouTube</a></p>
                 <p style="margin:0 0 8px;"><a href="https://instagram.com/ethicalfinancebasith.tamil" style="color:#0d5c7d;text-decoration:none;">Instagram</a></p>
                 <p style="margin:0 0 24px;"><a href="https://chat.whatsapp.com/InfThev3br60wmCUWRt3tq" style="color:#0d5c7d;text-decoration:none;">WhatsApp Community</a></p>
                 <p style="margin:0 0 4px;">JazakAllah,</p>
-                <p style="margin:0;color:#0e2d3d;font-weight:700;">Halal Wealth Webinar Team</p>
+                <p style="margin:0;color:#0e2d3d;font-weight:700;">Halal Wealth Team</p>
               </td>
             </tr>
           </table>
@@ -178,7 +197,7 @@ JazakAllah Khair for your understanding and continued support.
 
 JazakAllah,
 
-Halal Wealth Webinar Team`;
+Halal Wealth Team`;
 
   const html = `<!doctype html>
 <html lang="en">
@@ -249,7 +268,7 @@ Halal Wealth Webinar Team`;
                 <p style="margin:0 0 16px;">JazakAllah Khair for your understanding and continued support.</p>
                 
                 <p style="margin:0 0 4px;">JazakAllah,</p>
-                <p style="margin:0;color:#0e2d3d;font-weight:700;">Halal Wealth Webinar Team</p>
+                <p style="margin:0;color:#0e2d3d;font-weight:700;">Halal Wealth Team</p>
               </td>
             </tr>
           </table>
@@ -270,7 +289,7 @@ function buildZoomJoiningDetails(recipientName, posterAttachmentPath = null) {
 
 We are pleased to welcome you to our upcoming Halal Wealth Webinar.
 
-Topic: Halal Trade, Investments & Generational Wealth
+Topic: Halal Investments & Retirement Planning 
 
 Date: Sunday, 18 October 2026
 
@@ -321,7 +340,7 @@ Halal Wealth Webinar`;
                 <p style="margin:0 0 16px;">We are pleased to welcome you to our upcoming Halal Wealth Webinar.</p>
                 
                 <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
-                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">Halal Trade, Investments &amp; Generational Wealth</span></p>
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">Halal Investments &amp; Retirement Planning</span></p>
                   <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Date: <span style="font-weight:400;color:#243746;">Sunday, 18 October 2026</span></p>
                   <p style="margin:0 0 4px;font-weight:700;color:#0e2d3d;">Time:</p>
                   <ul style="margin:0 0 0 20px;padding:0;color:#243746;">
@@ -621,48 +640,6 @@ function classifySmtpError(error) {
   return 'SMTP_SEND_FAILED';
 }
 
-function classifyResendError(error) {
-  const code = String(error?.code || '').toUpperCase();
-  const name = String(error?.name || '').toLowerCase();
-  const message = String(error?.message || error?.error?.message || '').toLowerCase();
-  const statusCode = error?.statusCode || error?.status;
-
-  // Domain verification checks MUST precede status code checks
-  // Resend returns HTTP 403 or 422 with message containing "domain is not verified"
-  if (
-    statusCode === 422 ||
-    /domain|not verified|verify your domain|unverified domain|sender domain|onboarding@resend\.dev/i.test(message) ||
-    name.includes('domain') ||
-    name === 'validation_error'
-  ) {
-    return 'RESEND_DOMAIN_NOT_VERIFIED';
-  }
-  if (
-    statusCode === 401 ||
-    statusCode === 403 ||
-    /api_key|api key|invalid api|unauthorized|forbidden|not authorized|restricted to only/i.test(message) ||
-    name.includes('auth') ||
-    name === 'invalid_api_key'
-  ) {
-    return 'RESEND_AUTH_FAILED';
-  }
-  if (
-    statusCode === 429 ||
-    /rate limit|too many requests|quota/i.test(message) ||
-    name.includes('rate_limit')
-  ) {
-    return 'RESEND_RATE_LIMITED';
-  }
-  if (
-    /timeout|timed out|abort|econnreset|etimedout|fetch failed/i.test(message) ||
-    code === 'ETIMEDOUT' ||
-    code === 'ESOCKETTIMEDOUT'
-  ) {
-    return 'RESEND_NETWORK_TIMEOUT';
-  }
-  return error?.code || 'RESEND_API_ERROR';
-}
-
 function parseSenderString(raw) {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -678,68 +655,27 @@ function parseSenderString(raw) {
 }
 
 function resolveSenderConfig(environment = process.env) {
-  const rawSender = readFirstDefined(environment, ['EMAIL_FROM', 'RESEND_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
+  const rawSender = readFirstDefined(environment, ['EMAIL_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
   const parsed = parseSenderString(rawSender);
 
-  const configuredName = readFirstDefined(environment, ['EMAIL_FROM_NAME', 'RESEND_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']);
+  const configuredName = readFirstDefined(environment, ['EMAIL_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']);
   const fromName = configuredName || (parsed && parsed.name) || DEFAULT_FROM_NAME;
   const fromAddress = (parsed && parsed.address) || SENDER_EMAIL;
 
-  const rawReplyTo = readFirstDefined(environment, ['EMAIL_REPLY_TO', 'RESEND_REPLY_TO', 'MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']);
+  const rawReplyTo = readFirstDefined(environment, ['EMAIL_REPLY_TO', 'MAIL_REPLY_TO', 'SMTP_REPLY_TO', 'REPLY_TO']);
   const parsedReplyTo = parseSenderString(rawReplyTo);
   const replyToAddress = (parsedReplyTo && parsedReplyTo.address) || fromAddress;
 
   return { fromName, fromAddress, replyToAddress };
 }
 
-function resolveProviderConfig(environment = process.env, resendClient = null) {
-  const explicitProvider = readFirstDefined(environment, ['EMAIL_PROVIDER']).toLowerCase();
-  const resendApiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
-  const hasValidResendKey = Boolean(resendApiKey && !isPlaceholderValue(resendApiKey));
-  const isRender = Boolean(environment.RENDER);
-  const allowSmtpOnRender = String(readFirstDefined(environment, ['ALLOW_SMTP_ON_RENDER'])).toLowerCase() === 'true';
-
-  let provider;
-  if (explicitProvider === 'resend') {
-    provider = 'resend';
-  } else if (explicitProvider === 'smtp') {
-    provider = 'smtp';
-  } else if (resendClient) {
-    provider = 'resend';
-  } else if (isRender) {
-    // On Render, strictly default to Resend to prevent timeouts on blocked outbound SMTP ports
-    provider = 'resend';
-  } else if (hasValidResendKey) {
-    provider = 'resend';
-  } else {
-    provider = 'smtp';
-  }
-
+function resolveProviderConfig(environment = process.env) {
+  const explicitProvider = (readFirstDefined(environment, ['EMAIL_PROVIDER']) || 'smtp').toLowerCase();
   return {
-    provider,
+    provider: 'smtp',
     explicitProvider,
-    resendApiKey,
-    hasValidResendKey,
-    isRender,
-    allowSmtpOnRender,
-    useResend: provider === 'resend',
+    useResend: false,
   };
-}
-
-function createResendPosterAttachment(posterPath) {
-  if (!posterPath || !fs.existsSync(posterPath)) return [];
-  try {
-    const fileBuffer = fs.readFileSync(posterPath);
-    return [{
-      filename: 'webinar-poster.png',
-      content: fileBuffer,
-      contentType: 'image/png',
-      contentId: POSTER_CID,
-      content_id: POSTER_CID,
-    }];
-  } catch (_) {
-    return [];
-  }
 }
 
 function isPlaceholderValue(value) {
@@ -759,7 +695,7 @@ function createPosterAttachment(posterPath) {
   }];
 }
 
-function createWebinarEmailService({ resendClient = null, createTransporter = config => nodemailer.createTransport(config), logger = console } = {}) {
+function createWebinarEmailService({ createTransporter = config => nodemailer.createTransport(config), logger = console } = {}) {
   let cachedTransporter = null;
   let cachedKey = null;
 
@@ -804,7 +740,6 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     }
 
     const environment = process.env;
-    const providerConfig = resolveProviderConfig(environment, resendClient);
     const { fromName, fromAddress, replyToAddress } = resolveSenderConfig(environment);
     const posterPath = resolvePosterPath();
     const generatedMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@halalwealth.finance>`;
@@ -815,130 +750,12 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
       }
     }
 
-    // 1. Resend HTTP API Delivery (Primary for Render Free & cloud hosting)
-    if (providerConfig.useResend) {
-      if (!providerConfig.hasValidResendKey && !resendClient) {
-        const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please set RESEND_API_KEY in Render environment variables for HTTP email delivery.');
-        error.code = 'RESEND_KEY_MISSING';
-        logger.error('EMAIL_SEND_FAILED', {
-          stage: 'EMAIL_SEND_FAILED',
-          purpose,
-          code: error.code,
-          status: 'RESEND_KEY_MISSING',
-          recipient: sanitizeLogValue(cleanRecipient),
-          response: error.message,
-          timestamp: new Date().toISOString(),
-        });
-        throw error;
-      }
-
-      logger.info('SMTP_CONFIGURATION_CHECK', {
-        stage: 'SMTP_CONFIGURATION_CHECK',
-        purpose,
-        provider: 'Resend HTTP API',
-        transport: 'HTTPS (Port 443)',
-        fromAddress,
-        fromName,
-        replyToAddress,
-        authConfigured: Boolean(providerConfig.resendApiKey),
-        timestamp: new Date().toISOString(),
-      });
-
-      let client = resendClient;
-      if (!client) {
-        if (!Resend) {
-          const error = new Error('The "resend" package is required for HTTP email delivery.');
-          error.code = 'RESEND_PACKAGE_MISSING';
-          throw error;
-        }
-        client = new Resend(providerConfig.resendApiKey);
-      }
-
-      const attachments = createResendPosterAttachment(posterPath);
-      const emailPayload = {
-        from: `${fromName} <${fromAddress}>`,
-        to: [recipientEmail],
-        reply_to: replyToAddress,
-        subject: messageContent.subject,
-        text: messageContent.text,
-        html: messageContent.html,
-        headers: {
-          'X-Entity-Ref-ID': generatedMessageId,
-        },
-      };
-      if (attachments.length > 0) {
-        emailPayload.attachments = attachments;
-      }
-
-      try {
-        const response = await client.emails.send(emailPayload);
-        if (response && response.error) {
-          const error = new Error(response.error.message || 'Resend email delivery rejected');
-          error.name = response.error.name || 'ResendError';
-          error.code = classifyResendError(response.error);
-          error.statusCode = response.error.statusCode || 400;
-          throw error;
-        }
-        const messageId = response?.data?.id || generatedMessageId;
-        logger.info('EMAIL_SEND_ACCEPTED', {
-          stage: 'EMAIL_SEND_ACCEPTED',
-          purpose,
-          status: 'RESEND_ACCEPTED',
-          provider: 'Resend HTTP API',
-          messageId,
-          recipient: sanitizeLogValue(cleanRecipient),
-          sender: fromAddress,
-          note: 'Accepted by Resend API for transmission. Final delivery confirmed only if delivery webhook events configured.',
-          timestamp: new Date().toISOString(),
-        });
-        return {
-          status: 'RESEND_ACCEPTED',
-          id: messageId,
-          messageId,
-          accepted: [recipientEmail],
-          rejected: [],
-        };
-      } catch (error) {
-        const errorStatus = classifyResendError(error);
-        error.code = errorStatus;
-        const safeMessage = sanitizeLogValue(error && (error.message || error.code || 'Resend delivery failure'));
-        logger.error('EMAIL_SEND_FAILED', {
-          stage: 'EMAIL_SEND_FAILED',
-          purpose,
-          status: errorStatus,
-          code: error.code || 'RESEND_SEND_FAILED',
-          errorCategory: errorStatus,
-          response: safeMessage,
-          recipient: sanitizeLogValue(cleanRecipient),
-          sender: fromAddress,
-          timestamp: new Date().toISOString(),
-        });
-        throw error;
-      }
-    }
-
-    // 2. SMTP Transport (For unit tests with mock createTransporter, or local dev)
+    // SMTP Transport (Hostinger SMTP via Nodemailer)
     const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
     const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
     const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
     const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
     const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    // On Render without ALLOW_SMTP_ON_RENDER, explicitly fail rather than hanging on blocked ports (25, 465, 587)
-    if (providerConfig.isRender && !providerConfig.allowSmtpOnRender && !resendClient) {
-      const error = new Error('Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Please use EMAIL_PROVIDER=resend and configure RESEND_API_KEY for HTTP email delivery.');
-      error.code = 'RENDER_SMTP_PORT_BLOCKED';
-      logger.error('EMAIL_SEND_FAILED', {
-        stage: 'EMAIL_SEND_FAILED',
-        purpose,
-        code: error.code,
-        status: 'RENDER_SMTP_PORT_BLOCKED',
-        recipient: sanitizeLogValue(cleanRecipient),
-        response: error.message,
-        timestamp: new Date().toISOString(),
-      });
-      throw error;
-    }
 
     const isPort465 = port === 465;
     const isPort587 = port === 587;
@@ -962,7 +779,7 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     });
 
     if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: set RESEND_API_KEY for HTTP delivery, or SMTP credentials.');
+      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
       error.code = 'EMAIL_CONFIG_INCOMPLETE';
       throw error;
     }
@@ -1074,84 +891,7 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
 
   async function verifyEmailService({ timeoutMs = 10000 } = {}) {
     const environment = process.env;
-    const providerConfig = resolveProviderConfig(environment, resendClient);
     const { fromName, fromAddress } = resolveSenderConfig(environment);
-
-    if (providerConfig.useResend) {
-      if (!providerConfig.hasValidResendKey && !resendClient) {
-        return {
-          ok: false,
-          provider: 'Resend HTTP API',
-          transport: 'HTTPS (Port 443)',
-          code: 'RESEND_KEY_MISSING',
-          errorCategory: 'CONFIG_INCOMPLETE',
-          errorMessage: 'RESEND_API_KEY is not configured in environment variables. Outbound SMTP ports (25, 465, 587) are blocked on Render Free, so RESEND_API_KEY is required for HTTP delivery.',
-          fromAddress,
-          fromName,
-          renderCompatible: false,
-          latencyMs: 0,
-        };
-      }
-
-      const key = providerConfig.resendApiKey;
-      if (key && !resendClient && (!key.startsWith('re_') || isPlaceholderValue(key))) {
-        return {
-          ok: false,
-          provider: 'Resend HTTP API',
-          transport: 'HTTPS (Port 443)',
-          code: 'RESEND_KEY_INVALID',
-          errorCategory: 'CONFIG_INVALID',
-          errorMessage: 'RESEND_API_KEY appears invalid (keys must start with "re_"). Please verify your Resend API key.',
-          fromAddress,
-          fromName,
-          renderCompatible: false,
-          latencyMs: 0,
-        };
-      }
-
-      const domain = fromAddress.split('@')[1]?.toLowerCase() || '';
-      const PUBLIC_WEBMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
-      if (PUBLIC_WEBMAIL_DOMAINS.includes(domain)) {
-        return {
-          ok: false,
-          provider: 'Resend HTTP API',
-          transport: 'HTTPS (Port 443)',
-          code: 'RESEND_PUBLIC_DOMAIN_PROHIBITED',
-          errorCategory: 'DOMAIN_NOT_SUPPORTED',
-          errorMessage: `Resend prohibits sending from public webmail domains like @${domain}. You must use a verified custom domain (e.g. info@halalwealth.finance) or 'onboarding@resend.dev' for testing.`,
-          fromAddress,
-          fromName,
-          renderCompatible: true,
-          latencyMs: 0,
-        };
-      }
-
-      if (!Resend && !resendClient) {
-        return {
-          ok: false,
-          provider: 'Resend HTTP API',
-          transport: 'HTTPS (Port 443)',
-          code: 'RESEND_PACKAGE_MISSING',
-          errorCategory: 'DEPENDENCY_MISSING',
-          errorMessage: 'The "resend" npm package is not installed.',
-          fromAddress,
-          fromName,
-          renderCompatible: false,
-          latencyMs: 0,
-        };
-      }
-
-      return {
-        ok: true,
-        provider: 'Resend HTTP API',
-        transport: 'HTTPS (Port 443)',
-        fromAddress,
-        fromName,
-        resendConfigured: true,
-        renderCompatible: true,
-        latencyMs: 0,
-      };
-    }
 
     const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
     const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
@@ -1163,24 +903,13 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
     if (!isConfigured) {
       return {
         ok: false,
+        success: false,
         provider: 'Hostinger SMTP (Nodemailer)',
         code: 'EMAIL_CONFIG_INCOMPLETE',
         errorCategory: 'CONFIG_INCOMPLETE',
-        errorMessage: 'Email service configuration is incomplete: SMTP host, user, or pass missing, and RESEND_API_KEY not configured.',
+        message: 'Email service configuration is incomplete: SMTP host, user, or pass missing.',
+        errorMessage: 'Email service configuration is incomplete: SMTP host, user, or pass missing.',
         host: host || 'not set',
-        port,
-        fromAddress,
-      };
-    }
-
-    if (process.env.RENDER && !process.env.ALLOW_SMTP_ON_RENDER && !resendClient) {
-      return {
-        ok: false,
-        provider: 'Hostinger SMTP (Nodemailer)',
-        code: 'RENDER_FREE_PORT_BLOCKED',
-        errorCategory: 'HOSTING_PORT_BLOCKED',
-        errorMessage: 'Outbound SMTP ports (25, 465, 587) are blocked on Render Free. Configure RESEND_API_KEY for HTTP delivery.',
-        host,
         port,
         fromAddress,
       };
@@ -1209,6 +938,7 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
       const latencyMs = Date.now() - startTime;
       return {
         ok: true,
+        success: true,
         provider: 'Hostinger SMTP (Nodemailer)',
         transport: secure ? `SMTPS (Port ${port})` : `SMTP+STARTTLS (Port ${port})`,
         host,
@@ -1224,9 +954,11 @@ function createWebinarEmailService({ resendClient = null, createTransporter = co
       const errorCategory = classifySmtpError(error);
       return {
         ok: false,
+        success: false,
         provider: 'Hostinger SMTP (Nodemailer)',
         code: error.code || 'SMTP_VERIFY_FAILED',
         errorCategory,
+        message: sanitizeLogValue(error.message || 'SMTP connection/auth failed'),
         errorMessage: sanitizeLogValue(error.message || 'SMTP connection/auth failed'),
         host,
         port,
@@ -1261,8 +993,6 @@ module.exports = {
   buildFeedbackEmail,
   buildCustomEmail,
   createWebinarEmailService,
-  classifyResendError,
-  createResendPosterAttachment,
   resolveSenderConfig,
   resolveProviderConfig,
   verifyEmailService: (...args) => createWebinarEmailService().verifyEmailService(...args),
