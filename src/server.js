@@ -14,47 +14,24 @@ function isPlaceholder(value) {
 }
 
 async function verifyEmailConfiguration() {
-  const host = process.env.SMTP_HOST || process.env.MAIL_HOST;
-  if (!host) {
-    console.warn('Email service: SMTP credentials are not set. Set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS in environment variables.');
-    return;
-  }
-
-  const port = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || (host.includes('hostinger') ? 465 : 587));
-  const username = process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.MAIL_USERNAME || process.env.MAIL_USER;
-  const password = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.MAIL_PASS || process.env.MAIL_PASSWORD;
-  const useSecureSocket = String(process.env.SMTP_SECURE || process.env.MAIL_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
-
-  if (!username || !password || !Number.isInteger(port) || port < 1 || isPlaceholder(password)) {
-    console.warn('Email service: SMTP username or password is missing or incomplete.');
-    return;
-  }
-
-  const isSecure = useSecureSocket || port === 465;
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: isSecure,
-    requireTLS: !isSecure && port !== 465,
-    auth: { user: username, pass: password },
-    family: 4,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
-
+  const { verifyEmailService } = require('./services/webinarEmailService');
   try {
-    await transporter.verify();
-    console.log(`SMTP connected successfully to ${host}:${port} (${username})`);
-  } catch (error) {
-    console.warn('SMTP verification notice:', {
-      code: error.code || 'SMTP_VERIFY_FAILED',
-      host,
-      port,
-      secure: isSecure,
-      username,
-      message: error.message || 'Authentication failed',
-    });
+    const diagnostic = await verifyEmailService({ timeoutMs: 8000 });
+    if (diagnostic.ok) {
+      console.log(`SMTP connected successfully to ${diagnostic.host}:${diagnostic.port} (${diagnostic.authenticatedUser}) via ${diagnostic.transport}`);
+    } else {
+      console.warn('SMTP verification notice:', {
+        code: diagnostic.code,
+        errorCategory: diagnostic.errorCategory,
+        timeoutCategory: diagnostic.timeoutCategory || null,
+        host: diagnostic.host,
+        port: diagnostic.port,
+        secure: diagnostic.secure,
+        message: diagnostic.errorMessage || diagnostic.message,
+      });
+    }
+  } catch (err) {
+    console.warn('Background SMTP verification notice:', err?.message || err);
   }
 }
 app.use(helmet());

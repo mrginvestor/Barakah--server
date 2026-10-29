@@ -497,3 +497,89 @@ test('verifyEmailService verifies successfully with mock transporter', async () 
     if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
   }
 });
+
+test('verifyEmailService verifies port 465 uses implicit TLS and port 587 uses STARTTLS', async () => {
+  let capturedConfigs = [];
+  const mockCreateTransporter = config => {
+    capturedConfigs.push(config);
+    return {
+      verify: async () => true,
+    };
+  };
+
+  const service = createWebinarEmailService({ createTransporter: mockCreateTransporter });
+  const prevHost = process.env.SMTP_HOST;
+  const prevPort = process.env.SMTP_PORT;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+
+  process.env.SMTP_HOST = 'smtp.hostinger.com';
+  process.env.SMTP_USER = 'info@halalwealth.finance';
+  process.env.SMTP_PASS = 'mockpass';
+
+  try {
+    // 1. Test Port 465 (implicit TLS)
+    process.env.SMTP_PORT = '465';
+    const res465 = await service.verifyEmailService();
+    assert.equal(res465.ok, true);
+    assert.equal(res465.transport, 'SMTPS (Port 465)');
+    assert.equal(res465.secure, true);
+    assert.equal(capturedConfigs[0].secure, true);
+    assert.equal(capturedConfigs[0].port, 465);
+
+    // 2. Test Port 587 (STARTTLS)
+    process.env.SMTP_PORT = '587';
+    const res587 = await service.verifyEmailService();
+    assert.equal(res587.ok, true);
+    assert.equal(res587.transport, 'SMTP+STARTTLS (Port 587)');
+    assert.equal(res587.secure, false);
+    assert.equal(capturedConfigs[1].secure, false);
+    assert.equal(capturedConfigs[1].requireTLS, true);
+    assert.equal(capturedConfigs[1].port, 587);
+  } finally {
+    if (prevHost) process.env.SMTP_HOST = prevHost; else delete process.env.SMTP_HOST;
+    if (prevPort) process.env.SMTP_PORT = prevPort; else delete process.env.SMTP_PORT;
+    if (prevUser) process.env.SMTP_USER = prevUser; else delete process.env.SMTP_USER;
+    if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
+  }
+});
+
+test('verifyEmailService reports safe actionable diagnostic without credentials on timeout', async () => {
+  const timeoutError = new Error('Connection timeout');
+  timeoutError.code = 'ETIMEDOUT';
+  timeoutError.command = 'CONN';
+
+  const mockCreateTransporter = () => ({
+    verify: async () => { throw timeoutError; },
+  });
+
+  const service = createWebinarEmailService({ createTransporter: mockCreateTransporter });
+  const prevHost = process.env.SMTP_HOST;
+  const prevPort = process.env.SMTP_PORT;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+
+  process.env.SMTP_HOST = 'smtp.hostinger.com';
+  process.env.SMTP_PORT = '465';
+  process.env.SMTP_USER = 'info@halalwealth.finance';
+  process.env.SMTP_PASS = 'superSecretPassword123';
+
+  try {
+    const res = await service.verifyEmailService();
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'ETIMEDOUT');
+    assert.equal(res.errorCategory, 'SMTP_TIMEOUT');
+    assert.equal(res.timeoutCategory, 'CONNECTION_TIMEOUT');
+    assert.equal(res.host, 'smtp.hostinger.com');
+    assert.equal(res.port, 465);
+    assert.match(res.message, /Render Free Tier web services/);
+    assert.match(res.message, /Upgrade the Render web service to a paid instance/);
+    assert.doesNotMatch(res.message, /superSecretPassword123/);
+    assert.doesNotMatch(res.errorMessage, /superSecretPassword123/);
+  } finally {
+    if (prevHost) process.env.SMTP_HOST = prevHost; else delete process.env.SMTP_HOST;
+    if (prevPort) process.env.SMTP_PORT = prevPort; else delete process.env.SMTP_PORT;
+    if (prevUser) process.env.SMTP_USER = prevUser; else delete process.env.SMTP_USER;
+    if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
+  }
+});

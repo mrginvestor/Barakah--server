@@ -77,11 +77,16 @@ async function runDiagnostic() {
     console.log(`  Latency:      ${diagnostic.latencyMs} ms`);
   } else {
     console.error('  STATUS: FAILED');
-    console.error(`  Provider:       ${diagnostic.provider}`);
-    console.error(`  Error Code:     ${diagnostic.code}`);
-    console.error(`  Category:       ${diagnostic.errorCategory}`);
-    console.error(`  Message:        ${diagnostic.errorMessage}`);
-    if (diagnostic.host) console.error(`  Host/Port:      ${diagnostic.host}:${diagnostic.port}`);
+    console.error(`  Provider:         ${diagnostic.provider}`);
+    console.error(`  Error Code:       ${diagnostic.code}`);
+    console.error(`  Category:         ${diagnostic.errorCategory}`);
+    if (diagnostic.timeoutCategory) {
+      console.error(`  Timeout Category: ${diagnostic.timeoutCategory}`);
+    }
+    if (diagnostic.host) {
+      console.error(`  Host/Port:        ${diagnostic.host}:${diagnostic.port} (${diagnostic.secure ? 'secure: true, implicit TLS' : 'secure: false, STARTTLS'})`);
+    }
+    console.error(`  Message:          ${diagnostic.errorMessage}`);
   }
 
   // 3. Optional Controlled Test Email Submission

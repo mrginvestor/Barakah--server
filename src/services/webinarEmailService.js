@@ -92,11 +92,15 @@ function buildRegistrationConfirmation(recipientName, posterAttachmentPath = nul
                 </div>`
     : '';
 
+  const accessNotice = 'We will be sharing the webinar access link with you shortly. Please keep an eye on your email for the registration/access link and further details.';
+  const separator = hasCustomDetails || hasZoomLink ? '\n\n' : (posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n');
+
   const text = `Dear ${recipientName},
 
 Assalamu Alaikum warahmatullahi wabarakatuh!
 
-Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${detailsText}${zoomText}${posterAttachmentPath ? '\n\n[Image: webinar-poster]\n\n' : '\n\n\n\n'}
+Thank you for registering for our upcoming webinar. We’re delighted to have you join us.${detailsText}${zoomText}${separator}${accessNotice}
+
 In the meantime, stay connected with us to learn more about Islamic finance and Halal investments:
 
 YouTube: https://youtube.com/@ethicalfinancebasithtamil
@@ -105,7 +109,7 @@ WhatsApp Community: https://chat.whatsapp.com/InfThev3br60wmCUWRt3tq
 
 JazakAllah,
 
-Halal Wealth Webinar Team`;
+Halal Wealth Team`;
 
   const html = `<!doctype html>
 <html lang="en">
@@ -289,7 +293,7 @@ function buildZoomJoiningDetails(recipientName, posterAttachmentPath = null) {
 
 We are pleased to welcome you to our upcoming Halal Wealth Webinar.
 
-Topic: Halal Investments & Retirement Planning 
+Topic: Halal Trade, Investments & Generational Wealth
 
 Date: Sunday, 18 October 2026
 
@@ -340,7 +344,7 @@ Halal Wealth Webinar`;
                 <p style="margin:0 0 16px;">We are pleased to welcome you to our upcoming Halal Wealth Webinar.</p>
                 
                 <div style="background-color:#f8fafc;border-left:4px solid #b98a2a;padding:16px 20px;margin:20px 0;border-radius:0 8px 8px 0;">
-                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">Halal Investments &amp; Retirement Planning</span></p>
+                  <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Topic: <span style="font-weight:400;color:#243746;">Halal Trade, Investments &amp; Generational Wealth</span></p>
                   <p style="margin:0 0 8px;font-weight:700;color:#0e2d3d;">Date: <span style="font-weight:400;color:#243746;">Sunday, 18 October 2026</span></p>
                   <p style="margin:0 0 4px;font-weight:700;color:#0e2d3d;">Time:</p>
                   <ul style="margin:0 0 0 20px;padding:0;color:#243746;">
@@ -640,6 +644,49 @@ function classifySmtpError(error) {
   return 'SMTP_SEND_FAILED';
 }
 
+function classifyTimeoutCategory(error) {
+  if (!error) return null;
+  const message = String(error.message || error.response || '').toLowerCase();
+  const code = String(error.code || '').toUpperCase();
+  const command = String(error.command || '').toUpperCase();
+
+  if (command === 'CONN' || code === 'ETIMEDOUT' || /connection timeout|connect etimedout/i.test(message)) {
+    return 'CONNECTION_TIMEOUT';
+  }
+  if (/greeting timeout/i.test(message)) {
+    return 'GREETING_TIMEOUT';
+  }
+  if (code === 'ESOCKETTIMEDOUT' || /socket.*timeout/i.test(message)) {
+    return 'SOCKET_TIMEOUT';
+  }
+  return 'NETWORK_TIMEOUT';
+}
+
+function formatSmtpDiagnosticMessage(error, { host, port, secure }) {
+  if (!error) return 'SMTP check passed';
+  const errorCategory = classifySmtpError(error);
+  const code = String(error.code || 'UNKNOWN').toUpperCase();
+
+  if (errorCategory === 'SMTP_TIMEOUT') {
+    const timeoutCat = classifyTimeoutCategory(error);
+    const transportDesc = secure ? `port ${port} (implicit TLS/SMTPS)` : `port ${port} (STARTTLS)`;
+    return `TCP connection to ${host} on ${transportDesc} timed out (${code}, category: ${timeoutCat}). ` +
+      `Hostinger SMTP requires open outbound TCP access on port ${port}. ` +
+      `Cloud hosting providers (such as Render Free Tier web services) block outbound network traffic on SMTP ports 25, 465, and 587 at the infrastructure firewall level, causing all connection attempts to time out. ` +
+      `Actionable resolution: Upgrade the Render web service to a paid instance (which unblocks outbound ports 465 and 587), or deploy the backend on an infrastructure allowing SMTP egress.`;
+  }
+
+  if (errorCategory === 'SMTP_AUTH_FAILED') {
+    return `Authentication failed with ${host}:${port} (${code}). Please check your SMTP mailbox username and password in environment variables.`;
+  }
+
+  if (errorCategory === 'SMTP_CONNECTION_FAILED') {
+    return `Connection to ${host}:${port} failed (${code}). Verify that the hostname is reachable and DNS resolves correctly.`;
+  }
+
+  return sanitizeLogValue(error.message || 'SMTP operation failed');
+}
+
 function parseSenderString(raw) {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -838,13 +885,19 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       return info;
     } catch (error) {
       const errorStatus = classifySmtpError(error);
-      const safeMessage = sanitizeLogValue(error && (error.message || error.response || error.code || 'SMTP send failure'));
+      const isTimeout = errorStatus === 'SMTP_TIMEOUT' || error?.code === 'ETIMEDOUT';
+      const timeoutCategory = isTimeout ? classifyTimeoutCategory(error) : null;
+      const safeMessage = isTimeout
+        ? formatSmtpDiagnosticMessage(error, { host, port, secure: transportConfig.secure })
+        : sanitizeLogValue(error && (error.message || error.response || error.code || 'SMTP send failure'));
+
       logger.error('EMAIL_SEND_FAILED', {
         stage: 'EMAIL_SEND_FAILED',
         purpose,
         status: errorStatus,
         code: error.code || 'SMTP_SEND_FAILED',
         errorCategory: errorStatus,
+        ...(timeoutCategory ? { timeoutCategory } : {}),
         response: safeMessage,
         recipient: sanitizeLogValue(cleanRecipient),
         host,
@@ -855,6 +908,9 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
       if (errorStatus === 'SMTP_TIMEOUT' || errorStatus === 'SMTP_CONNECTION_FAILED') {
         resetTransporter();
       }
+      error.errorCategory = errorStatus;
+      if (timeoutCategory) error.timeoutCategory = timeoutCategory;
+      error.diagnosticMessage = safeMessage;
       throw error;
     }
   }
@@ -952,14 +1008,21 @@ function createWebinarEmailService({ createTransporter = config => nodemailer.cr
     } catch (error) {
       const latencyMs = Date.now() - startTime;
       const errorCategory = classifySmtpError(error);
+      const isTimeout = errorCategory === 'SMTP_TIMEOUT' || error?.code === 'ETIMEDOUT';
+      const timeoutCategory = isTimeout ? classifyTimeoutCategory(error) : null;
+      const actionableMessage = isTimeout
+        ? formatSmtpDiagnosticMessage(error, { host, port, secure })
+        : sanitizeLogValue(error.message || 'SMTP connection/auth failed');
+
       return {
         ok: false,
         success: false,
         provider: 'Hostinger SMTP (Nodemailer)',
         code: error.code || 'SMTP_VERIFY_FAILED',
         errorCategory,
-        message: sanitizeLogValue(error.message || 'SMTP connection/auth failed'),
-        errorMessage: sanitizeLogValue(error.message || 'SMTP connection/auth failed'),
+        ...(timeoutCategory ? { timeoutCategory } : {}),
+        message: actionableMessage,
+        errorMessage: actionableMessage,
         host,
         port,
         secure,
