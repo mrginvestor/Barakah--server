@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const WebinarRegistration = require('../models/WebinarRegistration');
 const Webinar = require('../models/Webinar');
 const { validateWebinarRegistration } = require('../utils/webinarValidation');
@@ -47,9 +48,22 @@ function normalizeLegacyRegistration(registration) {
   };
 }
 
-const REGISTRATION_CLOSED_MESSAGE = 'Registration for this webinar has now closed. We appreciate your interest and support.';
+const REGISTRATION_CLOSED_MESSAGE = 'Registration for this webinar is now closed. Thank you for your interest. We look forward to connecting with you.';
 
-function isWebinarRegistrationClosed(environment = process.env) {
+function isWebinarRegistrationClosed(webinarId = 'halal-wealth-nov-2026', environment = process.env) {
+  if (typeof webinarId === 'object' && webinarId !== null && !webinarId.webinarId) {
+    environment = webinarId;
+    webinarId = 'halal-wealth-nov-2026';
+  }
+  const idStr = String((typeof webinarId === 'object' ? webinarId?.webinarId : webinarId) || 'halal-wealth-nov-2026').trim();
+  const normalizedKey = idStr.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+
+  if (environment[`WEBINAR_REGISTRATION_CLOSED_${normalizedKey}`] !== undefined) {
+    return String(environment[`WEBINAR_REGISTRATION_CLOSED_${normalizedKey}`]).toLowerCase() === 'true';
+  }
+  if (environment[`WEBINAR_${normalizedKey}_CLOSED`] !== undefined) {
+    return String(environment[`WEBINAR_${normalizedKey}_CLOSED`]).toLowerCase() === 'true';
+  }
   if (environment.WEBINAR_REGISTRATION_CLOSED !== undefined) {
     return String(environment.WEBINAR_REGISTRATION_CLOSED).toLowerCase() === 'true';
   }
@@ -61,6 +75,7 @@ function isWebinarRegistrationClosed(environment = process.env) {
 
 function createWebinarRegistrationHandler({
   registrationModel = WebinarRegistration,
+  webinarModel = Webinar,
   emailService = webinarEmailService,
   logger = console,
   isRegistrationClosed = isWebinarRegistrationClosed,
@@ -74,23 +89,49 @@ function createWebinarRegistrationHandler({
 
   return async (req, res) => {
     try {
+      const targetWebinarId = String(req.body?.webinarId || 'halal-wealth-nov-2026').trim();
       const rawEmail = String(req.body?.email || '').trim().toLowerCase();
       const sanitizedRecipient = rawEmail ? rawEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3') : null;
       safeLogger.info('REGISTRATION_REQUEST_RECEIVED', {
         stage: 'REGISTRATION_REQUEST_RECEIVED',
         recipient: sanitizedRecipient,
-        webinarId: req.body?.webinarId || 'halal-wealth-nov-2026',
+        webinarId: targetWebinarId,
         timestamp: new Date().toISOString(),
       });
 
-      const closed = typeof isRegistrationClosed === 'function'
-        ? isRegistrationClosed()
-        : Boolean(isRegistrationClosed);
+      let closed = false;
+      const isMongooseModel = Boolean(webinarModel?.db || webinarModel?.schema);
+      const isDbConnected = Boolean(mongoose?.connection?.readyState === 1);
+
+      if (webinarModel && typeof webinarModel.findOne === 'function' && (!isMongooseModel || isDbConnected)) {
+        try {
+          let queryPromise = webinarModel.findOne({
+            $or: [
+              { webinarId: targetWebinarId },
+              ...(targetWebinarId === 'halal-wealth-nov-2026' ? [{ title: /Halal Wealth/i, date: /November 1/i }] : []),
+            ],
+          });
+          if (queryPromise && typeof queryPromise.lean === 'function') {
+            queryPromise = queryPromise.lean();
+          }
+          const webinarDoc = await queryPromise;
+          if (webinarDoc) {
+            closed = webinarDoc.registrationOpen === false || webinarDoc.isRegistrationClosed === true || webinarDoc.status === 'Completed';
+          }
+        } catch (_) {}
+      }
+
+      if (!closed && typeof isRegistrationClosed === 'function') {
+        closed = isRegistrationClosed(targetWebinarId);
+      } else if (!closed && typeof isRegistrationClosed === 'boolean') {
+        closed = isRegistrationClosed;
+      }
 
       if (closed) {
         return res.status(403).json({
           success: false,
           closed: true,
+          registrationOpen: false,
           message: REGISTRATION_CLOSED_MESSAGE,
         });
       }
@@ -393,13 +434,42 @@ function createWebinarRegistrationHandler({
 
 function getWebinarRegistrationStatusHandler({
   isRegistrationClosed = isWebinarRegistrationClosed,
+  webinarModel = Webinar,
 } = {}) {
-  return (req, res) => {
-    const closed = typeof isRegistrationClosed === 'function'
-      ? isRegistrationClosed()
-      : Boolean(isRegistrationClosed);
+  return async (req, res) => {
+    const targetWebinarId = String(req.query?.webinarId || 'halal-wealth-nov-2026').trim();
+    let closed = false;
+    const isMongooseModel = Boolean(webinarModel?.db || webinarModel?.schema);
+    const isDbConnected = Boolean(mongoose?.connection?.readyState === 1);
+
+    if (webinarModel && typeof webinarModel.findOne === 'function' && (!isMongooseModel || isDbConnected)) {
+      try {
+        let queryPromise = webinarModel.findOne({
+          $or: [
+            { webinarId: targetWebinarId },
+            ...(targetWebinarId === 'halal-wealth-nov-2026' ? [{ title: /Halal Wealth/i, date: /November 1/i }] : []),
+          ],
+        });
+        if (queryPromise && typeof queryPromise.lean === 'function') {
+          queryPromise = queryPromise.lean();
+        }
+        const webinarDoc = await queryPromise;
+        if (webinarDoc) {
+          closed = webinarDoc.registrationOpen === false || webinarDoc.isRegistrationClosed === true || webinarDoc.status === 'Completed';
+        }
+      } catch (_) {}
+    }
+
+    if (!closed && typeof isRegistrationClosed === 'function') {
+      closed = isRegistrationClosed(targetWebinarId);
+    } else if (!closed && typeof isRegistrationClosed === 'boolean') {
+      closed = isRegistrationClosed;
+    }
+
     return res.json({
       closed,
+      registrationOpen: !closed,
+      webinarId: targetWebinarId,
       message: closed ? REGISTRATION_CLOSED_MESSAGE : 'Registration is open.',
     });
   };

@@ -196,7 +196,6 @@ test('rejects incoming registration with HTTP 403 and friendly message when regi
   assert.equal(response.body.success, false);
   assert.equal(response.body.closed, true);
   assert.equal(response.body.message, REGISTRATION_CLOSED_MESSAGE);
-  assert.equal(response.body.message, 'Registration for this webinar has now closed. We appreciate your interest and support.');
   assert.equal(dbQueried, false);
   assert.equal(emailAttempted, false);
 });
@@ -557,5 +556,74 @@ test('validates WhatsApp direct link with registrant name, reference ID, and pre
   assert.ok(text2.includes('Name: Fatima Al-Mansoor'));
   assert.ok(text2.includes(`Reference ID: ${ref2}`));
   assert.notEqual(url1, url2, 'WhatsApp URLs for different users must be distinct');
+});
+
+test('blocks registration when webinar is marked closed in database with exact message and 403', async () => {
+  const handler = createWebinarRegistrationHandler({
+    webinarModel: {
+      findOne: async (query) => {
+        if (query.$or?.some(c => c.webinarId === 'halal-wealth-nov-2026')) {
+          return { webinarId: 'halal-wealth-nov-2026', isRegistrationClosed: true, registrationOpen: false };
+        }
+        return null;
+      },
+    },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+  await handler({ body: { ...validPayload, webinarId: 'halal-wealth-nov-2026' } }, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.closed, true);
+  assert.equal(res.body.message, 'Registration for this webinar is now closed. Thank you for your interest. We look forward to connecting with you.');
+});
+
+test('allows registration for other open upcoming webinars when November 1 webinar is closed', async () => {
+  let created = false;
+  const handler = createWebinarRegistrationHandler({
+    webinarModel: {
+      findOne: async (query) => {
+        if (query.$or?.some(c => c.webinarId === 'halal-wealth-nov-2026')) {
+          return { webinarId: 'halal-wealth-nov-2026', isRegistrationClosed: true, registrationOpen: false };
+        }
+        if (query.$or?.some(c => c.webinarId === 'business-webinar-2026')) {
+          return { webinarId: 'business-webinar-2026', isRegistrationClosed: false, registrationOpen: true };
+        }
+        return null;
+      },
+    },
+    registrationModel: {
+      findOne: async () => null,
+      create: async payload => { created = true; return { ...payload, _id: 'biz-123' }; },
+    },
+    emailService: { sendRegistrationConfirmation: async () => {} },
+    logger: createLogger(),
+  });
+  const res = createResponse();
+  await handler({ body: { ...validPayload, webinarId: 'business-webinar-2026', webinarVersion: 'Business Webinar 2026' } }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.body.success, true);
+  assert.equal(created, true);
+});
+
+test('getWebinarRegistrationStatus returns closed: true and exact closed message for November 1', async () => {
+  const handler = getWebinarRegistrationStatusHandler({
+    webinarModel: {
+      findOne: async (query) => {
+        if (query.$or?.some(c => c.webinarId === 'halal-wealth-nov-2026')) {
+          return { webinarId: 'halal-wealth-nov-2026', isRegistrationClosed: true, registrationOpen: false };
+        }
+        return null;
+      },
+    },
+  });
+  const res = createResponse();
+  await handler({ query: { webinarId: 'halal-wealth-nov-2026' } }, res);
+
+  assert.equal(res.body.closed, true);
+  assert.equal(res.body.registrationOpen, false);
+  assert.equal(res.body.message, 'Registration for this webinar is now closed. Thank you for your interest. We look forward to connecting with you.');
 });
 

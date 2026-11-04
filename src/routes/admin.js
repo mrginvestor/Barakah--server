@@ -2,11 +2,17 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { createAdminAuthController } = require('../controllers/adminAuthController');
 const { createAdminRegistrationController } = require('../controllers/adminRegistrationController');
+const { createRecordingCampaignController } = require('../controllers/recordingCampaignController');
+const { createReminderCampaignController } = require('../controllers/reminderCampaignController');
+const { createFeedbackCampaignController } = require('../controllers/feedbackCampaignController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 
 const router = express.Router();
 const authController = createAdminAuthController();
 const registrationController = createAdminRegistrationController();
+const recordingCampaignController = createRecordingCampaignController();
+const reminderCampaignController = createReminderCampaignController();
+const feedbackCampaignController = createFeedbackCampaignController();
 const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 8,
@@ -51,5 +57,30 @@ router.post('/campaigns/feedback/resend', registrationController.resendBulkFeedb
 router.post('/registrations/:id/send-feedback', registrationController.sendSingleFeedbackEmail);
 router.post('/registrations/:id/send-email', registrationController.sendIndividualEmail);
 router.put('/registrations/:id/status', registrationController.updateStatus);
+
+// Webinar Recording Sharing Campaign
+router.post('/recording-campaign/sync', recordingCampaignController.sync);
+router.get('/recording-campaign/preview', recordingCampaignController.preview);
+router.get('/recording-campaign/status', recordingCampaignController.status);
+router.post('/recording-campaign/send', recordingCampaignController.send);
+router.post('/recording-campaign/retry-failed', recordingCampaignController.retryFailed);
+router.post('/recording-campaign/send-individual', recordingCampaignController.sendIndividual);
+router.post('/recording-campaign/test-send', recordingCampaignController.testSend);
+
+// November 1 Webinar Reminder Campaign
+router.get('/reminder-campaign/preview', reminderCampaignController.preview);
+router.get('/reminder-campaign/status', reminderCampaignController.status);
+router.post('/reminder-campaign/send', reminderCampaignController.send);
+router.post('/reminder-campaign/retry-failed', reminderCampaignController.retryFailed);
+router.post('/reminder-campaign/test-send', reminderCampaignController.testSend);
+
+// Webinar Feedback Campaign
+router.post('/feedback-campaign/sync', feedbackCampaignController.sync);
+router.get('/feedback-campaign/preview', feedbackCampaignController.preview);
+router.get('/feedback-campaign/status', feedbackCampaignController.status);
+router.post('/feedback-campaign/send', feedbackCampaignController.send);
+router.post('/feedback-campaign/retry-failed', feedbackCampaignController.retryFailed);
+router.post('/feedback-campaign/send-individual', feedbackCampaignController.sendIndividual);
+router.post('/feedback-campaign/test-send', feedbackCampaignController.testSend);
 
 module.exports = router;

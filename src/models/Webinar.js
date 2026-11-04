@@ -50,6 +50,10 @@ const webinarSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  registrationOpen: {
+    type: Boolean,
+    default: true,
+  },
 }, { timestamps: true });
 
 webinarSchema.index({ isCurrent: 1 });

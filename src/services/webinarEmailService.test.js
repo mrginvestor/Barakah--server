@@ -18,7 +18,17 @@ const {
   DEFAULT_FEEDBACK_YOUTUBE_URL,
   DEFAULT_FEEDBACK_INSTAGRAM_URL,
   DEFAULT_FEEDBACK_BODY_TEXT,
+  RECORDING_EMAIL_SUBJECT,
+  RECORDING_PREVIEW_TEXT,
+  RECORDING_VIDEO_URL,
+  RECORDING_PROMO_IMAGE_URL,
+  NOV1_REMINDER_EMAIL_SUBJECT,
+  FEEDBACK_CAMPAIGN_SUBJECT,
+  FEEDBACK_CAMPAIGN_FORM_URL,
   buildFeedbackEmail,
+  buildFeedbackCampaignEmail,
+  buildRecordingEmail,
+  buildNovember1ReminderEmail,
   buildCustomEmail,
   createWebinarEmailService,
 } = require('./webinarEmailService');
@@ -335,6 +345,66 @@ test('sends feedback email using mock transporter without real network/SMTP', as
   assert.match(message.text, /Kindly submit this feedback form/);
   assert.match(message.html, /href="https:\/\/forms\.gle\/ysMqbTQ37BSnrbGT9"/);
 });
+
+test('builds the confirmed feedback campaign email with exact required wording, form URL, and poster', () => {
+  const email = buildFeedbackCampaignEmail('Brother Tariq');
+
+  assert.equal(email.subject, 'Your Feedback Matters – Halal Wealth Webinar');
+  assert.equal(FEEDBACK_CAMPAIGN_SUBJECT, email.subject);
+  assert.match(email.text, /Assalamu Alaikum Wr Wb,/);
+  assert.match(email.text, /Dear Brother Tariq,/);
+  assert.match(email.text, /Thank you for being part of our Halal Wealth Webinar!/);
+  assert.match(email.text, /We sincerely appreciate your time and participation\. We hope the session provided valuable insights into Halal Trade, Investments & Generational Wealth\./);
+  assert.match(email.text, /Your feedback is important to us\. It will help us improve our future webinars and deliver more meaningful sessions\./);
+  assert.match(email.text, /We kindly request you to take a few minutes to share your feedback\./);
+  assert.match(email.text, /Submit Your Feedback:\s+https:\/\/forms\.gle\/yzQWLFSDr1va4A5o9/);
+  assert.match(email.text, /JazakAllahu Khairan,\s+Halal Wealth Team/);
+
+  // HTML contains exact Google form URL and embedded poster CID
+  assert.match(email.html, /href="https:\/\/forms\.gle\/yzQWLFSDr1va4A5o9"/);
+  assert.match(email.html, /src="cid:webinar-poster"/);
+  assert.match(email.html, /alt="Halal Wealth Webinar Poster"/);
+  assert.match(email.html, /Halal Wealth Team/);
+});
+
+test('sends feedback campaign email using mock transporter without real network/SMTP', async () => {
+  const originalEnvironment = {
+    MAIL_HOST: process.env.MAIL_HOST,
+    MAIL_PORT: process.env.MAIL_PORT,
+    MAIL_USERNAME: process.env.MAIL_USERNAME,
+    MAIL_PASSWORD: process.env.MAIL_PASSWORD,
+  };
+  let message;
+  process.env.MAIL_HOST = 'smtp.provider.example';
+  process.env.MAIL_PORT = '465';
+  process.env.MAIL_USERNAME = 'info@halalwealth.finance';
+  process.env.MAIL_PASSWORD = 'test-only-password';
+
+  try {
+    const service = createWebinarEmailService({
+      createTransporter: () => ({
+        sendMail: async options => {
+          message = options;
+          return { accepted: [options.to], messageId: '<test-feedback-campaign-msg-id@halalwealth.finance>' };
+        },
+      }),
+    });
+    const result = await service.sendFeedbackCampaignEmail('tariq@example.com', 'Brother Tariq');
+    assert.equal(result.accepted[0], 'tariq@example.com');
+  } finally {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  assert.deepEqual(message.from, { name: 'Halal Wealth Webinar', address: 'info@halalwealth.finance' });
+  assert.equal(message.to, 'tariq@example.com');
+  assert.equal(message.subject, 'Your Feedback Matters – Halal Wealth Webinar');
+  assert.match(message.text, /https:\/\/forms\.gle\/yzQWLFSDr1va4A5o9/);
+  assert.match(message.html, /href="https:\/\/forms\.gle\/yzQWLFSDr1va4A5o9"/);
+  assert.match(message.html, /src="cid:webinar-poster"/);
+});
 test('builds the custom email with custom subject, message body, and HTML escaping', () => {
   const email = buildCustomEmail({
     subject: 'Special Webinar Update <Test>',
@@ -498,6 +568,130 @@ test('verifyEmailService verifies successfully with mock transporter', async () 
   }
 });
 
+test('builds the recording email with exact required wording, video URL, social links, and gold CTA button', () => {
+  const email = buildRecordingEmail('Brother Tariq');
+
+  assert.equal(email.subject, 'Webinar Recording – Halal Investment & Retirement Planning');
+  assert.equal(RECORDING_EMAIL_SUBJECT, 'Webinar Recording – Halal Investment & Retirement Planning');
+  assert.match(email.text, /Assalamu Alaikum Wr Wb,/);
+  assert.match(email.text, /Dear Brother Tariq,/);
+  assert.match(email.text, /Thank you for being part of our Halal Wealth Webinar\./);
+  assert.match(email.text, /We are pleased to share the recording of our session on Halal Investment & Retirement Planning\./);
+  assert.match(email.text, /If you missed any part of the session or would like to revisit the valuable insights/);
+  assert.match(email.text, /Watch the Webinar Recording:\s+https:\/\/youtu\.be\/dam9grDGDpY\?si=MNVFsmet8grttPf0/);
+  assert.match(email.text, /We hope this session provides you with valuable insights into Shariah-compliant investments/);
+  assert.match(email.text, /Stay Connected with Us:/);
+  assert.match(email.text, /YouTube:\s+https:\/\/www\.youtube\.com\/@ethicalfinancebasithtamil/);
+  assert.match(email.text, /Instagram:\s+https:\/\/www\.instagram\.com\/ethicalfinancebasith\.tamil/);
+  assert.match(email.text, /WhatsApp Community:\s+https:\/\/chat\.whatsapp\.com\/DNaN5HnNifI3eQ5yv265i9/);
+  assert.match(email.text, /JazakAllahu Khairan,\s+Halal Wealth Team/);
+
+  // HTML checks
+  assert.match(email.html, /Halal Investment &amp; Retirement Planning/);
+  assert.match(email.html, /Watch Webinar Recording/);
+  assert.match(email.html, /background-color:#082b49/);
+  assert.match(email.html, /background-color:#d4af5a/);
+  assert.match(email.html, /https:\/\/youtu\.be\/dam9grDGDpY\?si=MNVFsmet8grttPf0/);
+  assert.match(email.html, /Stay Connected with Us/);
+  assert.match(email.html, /https:\/\/www\.youtube\.com\/@ethicalfinancebasithtamil/);
+  assert.match(email.html, /https:\/\/www\.instagram\.com\/ethicalfinancebasith\.tamil/);
+  assert.match(email.html, /https:\/\/chat\.whatsapp\.com\/DNaN5HnNifI3eQ5yv265i9/);
+});
+
+test('sends recording email using mock transporter without real network/SMTP', async () => {
+  let sentMailOptions = null;
+  const mockCreateTransporter = () => ({
+    sendMail: async (options) => {
+      sentMailOptions = options;
+      return { messageId: '<mock-rec-id@halalwealth.finance>', accepted: [options.to], rejected: [] };
+    },
+  });
+
+  const service = createWebinarEmailService({ createTransporter: mockCreateTransporter });
+  const prevHost = process.env.SMTP_HOST;
+  const prevPort = process.env.SMTP_PORT;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+
+  process.env.SMTP_HOST = 'smtp.test.example';
+  process.env.SMTP_PORT = '465';
+  process.env.SMTP_USER = 'info@halalwealth.finance';
+  process.env.SMTP_PASS = 'testPassword123';
+
+  try {
+    const res = await service.sendRecordingEmail('attendee@example.com', 'Amina');
+    assert.equal(res.messageId, '<mock-rec-id@halalwealth.finance>');
+    assert.equal(sentMailOptions.to, 'attendee@example.com');
+    assert.equal(sentMailOptions.subject, 'Webinar Recording – Halal Investment & Retirement Planning');
+    assert.match(sentMailOptions.text, /https:\/\/youtu\.be\/dam9grDGDpY\?si=MNVFsmet8grttPf0/);
+    assert.match(sentMailOptions.html, /Watch Webinar Recording/);
+  } finally {
+    if (prevHost) process.env.SMTP_HOST = prevHost; else delete process.env.SMTP_HOST;
+    if (prevPort) process.env.SMTP_PORT = prevPort; else delete process.env.SMTP_PORT;
+    if (prevUser) process.env.SMTP_USER = prevUser; else delete process.env.SMTP_USER;
+    if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
+  }
+});
+
+test('builds the November 1 reminder email with exact required wording, date, time, and Zoom details', () => {
+  const email = buildNovember1ReminderEmail('Sister Mariam');
+
+  assert.equal(email.subject, 'Reminder: Your Halal Wealth Webinar Is Tomorrow!');
+  assert.equal(NOV1_REMINDER_EMAIL_SUBJECT, 'Reminder: Your Halal Wealth Webinar Is Tomorrow!');
+  assert.match(email.text, /Assalamu Alaikum Wr Wb,/);
+  assert.match(email.text, /This is a friendly reminder that the Halal Wealth Webinar is scheduled for tomorrow, Sunday, November 1\./);
+  assert.match(email.text, /Halal Investing & Retirement Planning/);
+  assert.match(email.text, /We encourage you to join on time and be part of this valuable discussion\./);
+  assert.match(email.text, /Webinar Details:/);
+  assert.match(email.text, /Date:\s+Sunday, November 1, 2026/);
+  assert.match(email.text, /Time:\s+11:00 AM IST/);
+  assert.match(email.text, /Joining Link:\s+https:\/\/us06web\.zoom\.us\/j\/81487983324/);
+  assert.match(email.text, /JazakAllah Khair,\s+Halal Wealth Team/);
+
+  // HTML checks
+  assert.match(email.html, /Webinar Reminder: Tomorrow!/);
+  assert.match(email.html, /Halal Investing &amp; Retirement Planning/);
+  assert.match(email.html, /Click Here to Join Zoom Webinar/);
+  assert.match(email.html, /https:\/\/us06web\.zoom\.us\/j\/81487983324/);
+  assert.match(email.html, /814 8798 3324/);
+  assert.match(email.html, /666991/);
+});
+
+test('sends November 1 reminder email using mock transporter without real network/SMTP', async () => {
+  let sentMailOptions = null;
+  const mockCreateTransporter = () => ({
+    sendMail: async (options) => {
+      sentMailOptions = options;
+      return { messageId: '<mock-nov1-rem-id@halalwealth.finance>', accepted: [options.to], rejected: [] };
+    },
+  });
+
+  const service = createWebinarEmailService({ createTransporter: mockCreateTransporter });
+  const prevHost = process.env.SMTP_HOST;
+  const prevPort = process.env.SMTP_PORT;
+  const prevUser = process.env.SMTP_USER;
+  const prevPass = process.env.SMTP_PASS;
+
+  process.env.SMTP_HOST = 'smtp.test.example';
+  process.env.SMTP_PORT = '465';
+  process.env.SMTP_USER = 'info@halalwealth.finance';
+  process.env.SMTP_PASS = 'testPassword123';
+
+  try {
+    const res = await service.sendNovember1ReminderEmail('nov1attendee@example.com', 'Mariam');
+    assert.equal(res.messageId, '<mock-nov1-rem-id@halalwealth.finance>');
+    assert.equal(sentMailOptions.to, 'nov1attendee@example.com');
+    assert.equal(sentMailOptions.subject, 'Reminder: Your Halal Wealth Webinar Is Tomorrow!');
+  } finally {
+    if (prevHost) process.env.SMTP_HOST = prevHost; else delete process.env.SMTP_HOST;
+    if (prevPort) process.env.SMTP_PORT = prevPort; else delete process.env.SMTP_PORT;
+    if (prevUser) process.env.SMTP_USER = prevUser; else delete process.env.SMTP_USER;
+    if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
+  }
+});
+
+
+
 test('verifyEmailService verifies port 465 uses implicit TLS and port 587 uses STARTTLS', async () => {
   let capturedConfigs = [];
   const mockCreateTransporter = config => {
@@ -583,3 +777,4 @@ test('verifyEmailService reports safe actionable diagnostic without credentials 
     if (prevPass) process.env.SMTP_PASS = prevPass; else delete process.env.SMTP_PASS;
   }
 });
+
