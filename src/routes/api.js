@@ -2,11 +2,48 @@ const express = require('express');
 const router = express.Router();
 const { createRegistration, checkIn, getRegistrations } = require('../controllers/registrationController');
 const { createWebinarRegistration, getWebinarRegistrationStatus, getWebinarRegistrations, getWebinars } = require('../controllers/webinarController');
+const {
+  getSummitCapacity,
+  createSummitRegistration,
+  getSummitPaymentDetails,
+  submitSummitPaymentProof,
+} = require('../controllers/summitController');
+const { receiptUpload } = require('../middleware/receiptUpload');
 const { requireAdmin } = require('../middleware/requireAdmin');
 
+// DEC Summit Registration & Payment Endpoints (Separate 50-capacity event, ₹500 fee)
+router.get('/dec-summit/availability', getSummitCapacity);
+router.get('/dec-summit/capacity', getSummitCapacity);
+router.post('/dec-summit/register', createSummitRegistration);
+router.get('/dec-summit/registration/:registrationId', getSummitPaymentDetails);
+router.get('/dec-summit/payment/:registrationId', getSummitPaymentDetails);
+router.post('/dec-summit/payment-proof', receiptUpload.single('receipt'), submitSummitPaymentProof);
+router.post('/dec-summit/payment/:registrationId/submit', receiptUpload.single('receipt'), submitSummitPaymentProof);
+
+// Backward-compatibility aliases for /small-summit/*
+router.get('/small-summit/availability', getSummitCapacity);
+router.get('/small-summit/capacity', getSummitCapacity);
+router.post('/small-summit/register', createSummitRegistration);
+router.get('/small-summit/registration/:registrationId', getSummitPaymentDetails);
+router.get('/small-summit/payment/:registrationId', getSummitPaymentDetails);
+router.post('/small-summit/payment-proof', receiptUpload.single('receipt'), submitSummitPaymentProof);
+router.post('/small-summit/payment/:registrationId/submit', receiptUpload.single('receipt'), submitSummitPaymentProof);
+
+// Backward-compatibility aliases for /summit/*
+router.get('/summit/availability', getSummitCapacity);
+router.get('/summit/capacity', getSummitCapacity);
+router.post('/summit/register', createSummitRegistration);
+router.get('/summit/registration/:registrationId', getSummitPaymentDetails);
+router.get('/summit/payment/:registrationId', getSummitPaymentDetails);
+router.post('/summit/payment-proof', receiptUpload.single('receipt'), submitSummitPaymentProof);
+router.post('/summit/payment/:registrationId/submit', receiptUpload.single('receipt'), submitSummitPaymentProof);
+
+// Main Summit Registration Endpoints (Original 5-Step Summit 2026, 400+ participants)
 router.post('/registrations', createRegistration);
 router.get('/registrations', requireAdmin, getRegistrations);
 router.post('/check-in', requireAdmin, checkIn);
+
+// Webinar Endpoints
 router.get('/webinars', getWebinars);
 router.get('/webinar/status', getWebinarRegistrationStatus);
 router.post('/webinar/register', createWebinarRegistration);
