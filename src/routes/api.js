@@ -11,6 +11,15 @@ const {
 const { receiptUpload } = require('../middleware/receiptUpload');
 const { requireAdmin } = require('../middleware/requireAdmin');
 
+// Investor Mission 2026 Registration & Payment Endpoints (Coimbatore, 50 capacity, ₹500 fee)
+router.get('/investor-mission/availability', getSummitCapacity);
+router.get('/investor-mission/capacity', getSummitCapacity);
+router.post('/investor-mission/register', createSummitRegistration);
+router.get('/investor-mission/registration/:registrationId', getSummitPaymentDetails);
+router.get('/investor-mission/payment/:registrationId', getSummitPaymentDetails);
+router.post('/investor-mission/payment-proof', receiptUpload.single('receipt'), submitSummitPaymentProof);
+router.post('/investor-mission/payment/:registrationId/submit', receiptUpload.single('receipt'), submitSummitPaymentProof);
+
 // DEC Summit Registration & Payment Endpoints (Separate 50-capacity event, ₹500 fee)
 router.get('/dec-summit/availability', getSummitCapacity);
 router.get('/dec-summit/capacity', getSummitCapacity);

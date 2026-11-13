@@ -94,6 +94,19 @@ router.post('/feedback-campaign/retry-failed', feedbackCampaignController.retryF
 router.post('/feedback-campaign/send-individual', feedbackCampaignController.sendIndividual);
 router.post('/feedback-campaign/test-send', feedbackCampaignController.testSend);
 
+// Investor Mission 2026 Event Registrations & Multi-Step Verification Operations
+router.get('/investor-mission/stats', getAdminSummitStats);
+router.get('/investor-mission/registrations', getAdminSummitRegistrations);
+router.get('/investor-mission/receipt/:registrationId', getPaymentReceiptFile);
+router.post('/investor-mission/registrations/:registrationId/approve-registration', approveSummitRegistration);
+router.post('/investor-mission/registrations/:registrationId/approve-payment', approveSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/approve', approveSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/reject-registration', rejectSummitRegistration);
+router.post('/investor-mission/registrations/:registrationId/reject-payment', rejectSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/reject', rejectSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
+router.post('/investor-mission/registrations/:registrationId/notes', addAdminVerificationNotes);
+
 // DEC Summit Event Registrations & Multi-Step Verification Operations
 router.get('/dec-summit/stats', getAdminSummitStats);
 router.get('/dec-summit/registrations', getAdminSummitRegistrations);
