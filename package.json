@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test": "node --test \"src/**/*.test.js\"",
-    "test:db": "node src/scripts/testDbConnection.js"
+    "test:db": "node src/scripts/testDbConnection.js",
+    "seed:im-admin": "node src/scripts/seedInvestorMissionAdmin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

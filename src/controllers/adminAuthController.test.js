@@ -156,3 +156,115 @@ test('accepts synonym environment variables such as ADMIN_PASS and ADMIN_JWT_SEC
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.token, 'synonym-token');
 });
+
+test('loginInvestorMissionAdmin authenticates SIO Coimbatore admin and issues INVESTOR_MISSION_ADMIN token', async () => {
+  let createdTokenPayload = null;
+  const mockUser = {
+    _id: 'mock-user-id-123',
+    username: 'SIO Coimbatore',
+    displayName: 'SIO Coimbatore',
+    role: 'INVESTOR_MISSION_ADMIN',
+    allowedEvents: ['INVESTOR_MISSION_2026'],
+    isActive: true,
+    failedLoginAttempts: 0,
+    lockUntil: null,
+    isLocked: () => false,
+    comparePassword: async (pwd) => pwd === 'TestPass@123',
+    save: async () => {},
+  };
+
+  const mockAdminModel = {
+    findOne: async ({ usernameLower }) => {
+      if (usernameLower === 'sio coimbatore') return mockUser;
+      return null;
+    },
+  };
+
+  const controller = createAdminAuthController({
+    getEnvironment: () => ({ JWT_SECRET: 's'.repeat(32) }),
+    adminUserModel: mockAdminModel,
+    signToken: (payload) => {
+      createdTokenPayload = payload;
+      return 'im-admin-jwt-token';
+    },
+  });
+
+  const response = createResponse();
+  await controller.loginInvestorMissionAdmin(
+    { body: { username: 'SIO Coimbatore', password: 'TestPass@123' }, ip: '127.0.0.1' },
+    response
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.token, 'im-admin-jwt-token');
+  assert.equal(response.body.role, 'INVESTOR_MISSION_ADMIN');
+  assert.equal(response.body.username, 'SIO Coimbatore');
+  assert.equal(createdTokenPayload.role, 'INVESTOR_MISSION_ADMIN');
+  assert.equal(createdTokenPayload.username, 'SIO Coimbatore');
+});
+
+test('loginInvestorMissionAdmin locks account after 5 failed attempts', async () => {
+  let savedUser = null;
+  const mockUser = {
+    _id: 'mock-user-id-123',
+    username: 'SIO Coimbatore',
+    role: 'INVESTOR_MISSION_ADMIN',
+    isActive: true,
+    failedLoginAttempts: 4,
+    lockUntil: null,
+    isLocked: () => false,
+    comparePassword: async () => false,
+    save: async function() { savedUser = this; },
+  };
+
+  const mockAdminModel = {
+    findOne: async () => mockUser,
+  };
+
+  const controller = createAdminAuthController({
+    getEnvironment: () => ({ JWT_SECRET: 's'.repeat(32) }),
+    adminUserModel: mockAdminModel,
+  });
+
+  const response = createResponse();
+  await controller.loginInvestorMissionAdmin(
+    { body: { username: 'SIO Coimbatore', password: 'wrong' }, ip: '127.0.0.1' },
+    response
+  );
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(mockUser.failedLoginAttempts, 5);
+  assert.ok(mockUser.lockUntil instanceof Date);
+});
+
+test('changePassword updates password hash when current password matches', async () => {
+  let saved = false;
+  const mockUser = {
+    username: 'SIO Coimbatore',
+    passwordHash: 'old-hash',
+    comparePassword: async (pwd) => pwd === 'OldSecret@123',
+    save: async function() { saved = true; },
+  };
+
+  const mockAdminModel = {
+    findOne: async () => mockUser,
+  };
+
+  const controller = createAdminAuthController({
+    adminUserModel: mockAdminModel,
+  });
+
+  const response = createResponse();
+  await controller.changePassword(
+    {
+      admin: { username: 'SIO Coimbatore', role: 'INVESTOR_MISSION_ADMIN' },
+      body: { currentPassword: 'OldSecret@123', newPassword: 'NewSecurePassword@2026' },
+    },
+    response
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(saved, true);
+  assert.notEqual(mockUser.passwordHash, 'old-hash');
+});

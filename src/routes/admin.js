@@ -20,7 +20,7 @@ const {
   exportAttendanceCsv,
   resendConfirmationEmail,
 } = require('../controllers/summitController');
-const { requireAdmin } = require('../middleware/requireAdmin');
+const { requireAdmin, requireInvestorMissionAdmin } = require('../middleware/requireAdmin');
 
 const router = express.Router();
 const authController = createAdminAuthController();
@@ -28,6 +28,7 @@ const registrationController = createAdminRegistrationController();
 const recordingCampaignController = createRecordingCampaignController();
 const reminderCampaignController = createReminderCampaignController();
 const feedbackCampaignController = createFeedbackCampaignController();
+
 const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 8,
@@ -36,9 +37,88 @@ const loginRateLimit = rateLimit({
   message: { message: 'Too many login attempts. Please try again later.' },
 });
 
+// Authentication endpoints
 router.post('/login', loginRateLimit, authController.login);
+router.post('/investor-mission/login', loginRateLimit, authController.loginInvestorMissionAdmin);
+router.post('/investor-mission-admin/login', loginRateLimit, authController.loginInvestorMissionAdmin);
+
+// Session endpoint (Accessible by both ROLE_ADMIN and INVESTOR_MISSION_ADMIN)
+router.get('/session', requireInvestorMissionAdmin, authController.getSession);
+
+// Investor Mission Password Change
+router.post('/investor-mission/change-password', requireInvestorMissionAdmin, authController.changePassword);
+
+// ============================================================================
+// INVESTOR MISSION 2026 EVENT OPERATIONS (ROLE_ADMIN & INVESTOR_MISSION_ADMIN)
+// ============================================================================
+router.get('/investor-mission/stats', requireInvestorMissionAdmin, getAdminSummitStats);
+router.get('/investor-mission/registrations', requireInvestorMissionAdmin, getAdminSummitRegistrations);
+router.get('/investor-mission/receipt/:registrationId', requireInvestorMissionAdmin, getPaymentReceiptFile);
+router.post('/investor-mission/registrations/:registrationId/approve-registration', requireInvestorMissionAdmin, approveSummitRegistration);
+router.post('/investor-mission/registrations/:registrationId/approve-payment', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/approve', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/reject-registration', requireInvestorMissionAdmin, rejectSummitRegistration);
+router.post('/investor-mission/registrations/:registrationId/reject-payment', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/reject', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/investor-mission/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
+router.post('/investor-mission/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
+router.post('/investor-mission/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/investor-mission/checkin', requireInvestorMissionAdmin, checkInParticipant);
+router.get('/investor-mission/attendance', requireInvestorMissionAdmin, getAttendanceStats);
+router.get('/investor-mission/attendance/export', requireInvestorMissionAdmin, exportAttendanceCsv);
+
+// DEC Summit Event Registrations & Multi-Step Verification Operations (Aliases)
+router.get('/dec-summit/stats', requireInvestorMissionAdmin, getAdminSummitStats);
+router.get('/dec-summit/registrations', requireInvestorMissionAdmin, getAdminSummitRegistrations);
+router.get('/dec-summit/receipt/:registrationId', requireInvestorMissionAdmin, getPaymentReceiptFile);
+router.post('/dec-summit/registrations/:registrationId/approve-registration', requireInvestorMissionAdmin, approveSummitRegistration);
+router.post('/dec-summit/registrations/:registrationId/approve-payment', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/dec-summit/registrations/:registrationId/approve', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/dec-summit/registrations/:registrationId/reject-registration', requireInvestorMissionAdmin, rejectSummitRegistration);
+router.post('/dec-summit/registrations/:registrationId/reject-payment', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/dec-summit/registrations/:registrationId/reject', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/dec-summit/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
+router.post('/dec-summit/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
+router.post('/dec-summit/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/dec-summit/checkin', requireInvestorMissionAdmin, checkInParticipant);
+router.get('/dec-summit/attendance', requireInvestorMissionAdmin, getAttendanceStats);
+router.get('/dec-summit/attendance/export', requireInvestorMissionAdmin, exportAttendanceCsv);
+
+// Backward-compatibility aliases for /small-summit/*
+router.get('/small-summit/stats', requireInvestorMissionAdmin, getAdminSummitStats);
+router.get('/small-summit/registrations', requireInvestorMissionAdmin, getAdminSummitRegistrations);
+router.get('/small-summit/receipt/:registrationId', requireInvestorMissionAdmin, getPaymentReceiptFile);
+router.post('/small-summit/registrations/:registrationId/approve-registration', requireInvestorMissionAdmin, approveSummitRegistration);
+router.post('/small-summit/registrations/:registrationId/approve-payment', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/small-summit/registrations/:registrationId/approve', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/small-summit/registrations/:registrationId/reject-registration', requireInvestorMissionAdmin, rejectSummitRegistration);
+router.post('/small-summit/registrations/:registrationId/reject-payment', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/small-summit/registrations/:registrationId/reject', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/small-summit/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
+router.post('/small-summit/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
+router.post('/small-summit/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/small-summit/checkin', requireInvestorMissionAdmin, checkInParticipant);
+router.get('/small-summit/attendance', requireInvestorMissionAdmin, getAttendanceStats);
+router.get('/small-summit/attendance/export', requireInvestorMissionAdmin, exportAttendanceCsv);
+
+// Backward-compatibility aliases for /summit/*
+router.get('/summit/stats', requireInvestorMissionAdmin, getAdminSummitStats);
+router.get('/summit/registrations', requireInvestorMissionAdmin, getAdminSummitRegistrations);
+router.get('/summit/receipt/:registrationId', requireInvestorMissionAdmin, getPaymentReceiptFile);
+router.post('/summit/registrations/:registrationId/approve-registration', requireInvestorMissionAdmin, approveSummitRegistration);
+router.post('/summit/registrations/:registrationId/approve-payment', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/summit/registrations/:registrationId/approve', requireInvestorMissionAdmin, approveSummitPayment);
+router.post('/summit/registrations/:registrationId/reject-registration', requireInvestorMissionAdmin, rejectSummitRegistration);
+router.post('/summit/registrations/:registrationId/reject-payment', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/summit/registrations/:registrationId/reject', requireInvestorMissionAdmin, rejectSummitPayment);
+router.post('/summit/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
+router.post('/summit/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
+
+// ============================================================================
+// MAIN SUMMIT & WEBINAR OPERATIONS (RESTRICTED TO ROLE_ADMIN ONLY)
+// ============================================================================
 router.use(requireAdmin);
-router.get('/session', authController.getSession);
+
 router.get('/email/diagnostic', registrationController.getEmailDiagnostic);
 router.post('/email/test-send', registrationController.sendTestDiagnosticEmail);
 router.get('/webinars', registrationController.getWebinars);
@@ -97,69 +177,5 @@ router.post('/feedback-campaign/send', feedbackCampaignController.send);
 router.post('/feedback-campaign/retry-failed', feedbackCampaignController.retryFailed);
 router.post('/feedback-campaign/send-individual', feedbackCampaignController.sendIndividual);
 router.post('/feedback-campaign/test-send', feedbackCampaignController.testSend);
-
-// Investor Mission 2026 Event Registrations & Multi-Step Verification Operations
-router.get('/investor-mission/stats', getAdminSummitStats);
-router.get('/investor-mission/registrations', getAdminSummitRegistrations);
-router.get('/investor-mission/receipt/:registrationId', getPaymentReceiptFile);
-router.post('/investor-mission/registrations/:registrationId/approve-registration', approveSummitRegistration);
-router.post('/investor-mission/registrations/:registrationId/approve-payment', approveSummitPayment);
-router.post('/investor-mission/registrations/:registrationId/approve', approveSummitPayment);
-router.post('/investor-mission/registrations/:registrationId/reject-registration', rejectSummitRegistration);
-router.post('/investor-mission/registrations/:registrationId/reject-payment', rejectSummitPayment);
-router.post('/investor-mission/registrations/:registrationId/reject', rejectSummitPayment);
-router.post('/investor-mission/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
-router.post('/investor-mission/registrations/:registrationId/notes', addAdminVerificationNotes);
-router.post('/investor-mission/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
-router.post('/investor-mission/checkin', checkInParticipant);
-router.get('/investor-mission/attendance', getAttendanceStats);
-router.get('/investor-mission/attendance/export', exportAttendanceCsv);
-
-// DEC Summit Event Registrations & Multi-Step Verification Operations
-router.get('/dec-summit/stats', getAdminSummitStats);
-router.get('/dec-summit/registrations', getAdminSummitRegistrations);
-router.get('/dec-summit/receipt/:registrationId', getPaymentReceiptFile);
-router.post('/dec-summit/registrations/:registrationId/approve-registration', approveSummitRegistration);
-router.post('/dec-summit/registrations/:registrationId/approve-payment', approveSummitPayment);
-router.post('/dec-summit/registrations/:registrationId/approve', approveSummitPayment);
-router.post('/dec-summit/registrations/:registrationId/reject-registration', rejectSummitRegistration);
-router.post('/dec-summit/registrations/:registrationId/reject-payment', rejectSummitPayment);
-router.post('/dec-summit/registrations/:registrationId/reject', rejectSummitPayment);
-router.post('/dec-summit/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
-router.post('/dec-summit/registrations/:registrationId/notes', addAdminVerificationNotes);
-router.post('/dec-summit/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
-router.post('/dec-summit/checkin', checkInParticipant);
-router.get('/dec-summit/attendance', getAttendanceStats);
-router.get('/dec-summit/attendance/export', exportAttendanceCsv);
-
-// Backward-compatibility aliases for /small-summit/*
-router.get('/small-summit/stats', getAdminSummitStats);
-router.get('/small-summit/registrations', getAdminSummitRegistrations);
-router.get('/small-summit/receipt/:registrationId', getPaymentReceiptFile);
-router.post('/small-summit/registrations/:registrationId/approve-registration', approveSummitRegistration);
-router.post('/small-summit/registrations/:registrationId/approve-payment', approveSummitPayment);
-router.post('/small-summit/registrations/:registrationId/approve', approveSummitPayment);
-router.post('/small-summit/registrations/:registrationId/reject-registration', rejectSummitRegistration);
-router.post('/small-summit/registrations/:registrationId/reject-payment', rejectSummitPayment);
-router.post('/small-summit/registrations/:registrationId/reject', rejectSummitPayment);
-router.post('/small-summit/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
-router.post('/small-summit/registrations/:registrationId/notes', addAdminVerificationNotes);
-router.post('/small-summit/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
-router.post('/small-summit/checkin', checkInParticipant);
-router.get('/small-summit/attendance', getAttendanceStats);
-router.get('/small-summit/attendance/export', exportAttendanceCsv);
-
-// Backward-compatibility aliases for /summit/*
-router.get('/summit/stats', getAdminSummitStats);
-router.get('/summit/registrations', getAdminSummitRegistrations);
-router.get('/summit/receipt/:registrationId', getPaymentReceiptFile);
-router.post('/summit/registrations/:registrationId/approve-registration', approveSummitRegistration);
-router.post('/summit/registrations/:registrationId/approve-payment', approveSummitPayment);
-router.post('/summit/registrations/:registrationId/approve', approveSummitPayment);
-router.post('/summit/registrations/:registrationId/reject-registration', rejectSummitRegistration);
-router.post('/summit/registrations/:registrationId/reject-payment', rejectSummitPayment);
-router.post('/summit/registrations/:registrationId/reject', rejectSummitPayment);
-router.post('/summit/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
-router.post('/summit/registrations/:registrationId/notes', addAdminVerificationNotes);
 
 module.exports = router;

@@ -133,6 +133,10 @@ if (!process.env.MONGODB_URI) {
   .then(() => {
     console.log('MongoDB Connected successfully');
     verifyAdminAuthConfiguration();
+    const { bootstrapInvestorMissionAdmin } = require('./utils/bootstrapAdminAccounts');
+    bootstrapInvestorMissionAdmin({ logger: console }).catch(err => {
+      console.warn('[ADMIN_BOOTSTRAP] Warning:', err?.message || err);
+    });
     const { defaultBulkEmailService } = require('./services/bulkEmailService');
     defaultBulkEmailService.recoverStalledJobs().catch(err => {
       console.warn('Background bulk email recovery notice:', err?.message || err);

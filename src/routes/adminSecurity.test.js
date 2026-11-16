@@ -50,6 +50,39 @@ test('protects every registration read and check-in route at the HTTP boundary',
     });
     assert.equal(forbidden.status, 403);
 
+    // Verify INVESTOR_MISSION_ADMIN access boundary
+    const imAdminToken = jwt.sign(
+      { username: 'SIO Coimbatore', displayName: 'SIO Coimbatore', role: 'INVESTOR_MISSION_ADMIN', allowedEvents: ['INVESTOR_MISSION_2026'] },
+      JWT_SECRET,
+      { algorithm: 'HS256', subject: 'investor-mission-admin', issuer: ADMIN_JWT_ISSUER, expiresIn: 60 },
+    );
+
+    // 1. IM Admin is allowed to access session
+    const imSessionRes = await fetch(`${baseUrl}/api/admin/session`, {
+      headers: { Authorization: `Bearer ${imAdminToken}` },
+    });
+    assert.equal(imSessionRes.status, 200);
+    const sessionJson = await imSessionRes.json();
+    assert.equal(sessionJson.role, 'INVESTOR_MISSION_ADMIN');
+    assert.equal(sessionJson.username, 'SIO Coimbatore');
+
+    // 2. IM Admin is forbidden (403) from accessing Main Summit / Webinar registrations & campaigns
+    const forbiddenPathsForIM = [
+      { path: '/api/admin/registrations', method: 'GET' },
+      { path: '/api/admin/webinars', method: 'GET' },
+      { path: '/api/admin/campaigns/feedback/preview', method: 'GET' },
+      { path: '/api/admin/email/diagnostic', method: 'GET' },
+      { path: '/api/registrations', method: 'GET' },
+      { path: '/api/check-in', method: 'POST' },
+    ];
+    for (const { path: fPath, method } of forbiddenPathsForIM) {
+      const fRes = await fetch(`${baseUrl}${fPath}`, {
+        method,
+        headers: { Authorization: `Bearer ${imAdminToken}` },
+      });
+      assert.equal(fRes.status, 403, `IM Admin must be forbidden (403) from ${fPath}`);
+    }
+
     const login = await fetch(`${baseUrl}/api/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
