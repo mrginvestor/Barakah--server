@@ -3,8 +3,10 @@ const fs = require('fs');
 const SummitRegistration = require('../models/SummitRegistration');
 const SUMMIT_CONFIG = require('../config/summitConfig');
 const { getNextRegistrationId } = require('./registrationController');
+const crypto = require('crypto');
 const { validateImageMagicBytes, UPLOAD_DIR } = require('../middleware/receiptUpload');
 const defaultEmailService = require('../services/webinarEmailService');
+const investorMissionEmailService = require('../services/investorMissionEmailService');
 
 /**
  * Generate separate registration IDs for Small Summit (e.g. SS26-00001)
@@ -663,6 +665,13 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
       };
     }
 
+    // Generate secure check-in token and hash if not already generated
+    if (!registration.checkInTokenHash) {
+      const rawToken = crypto.randomBytes(24).toString('hex');
+      registration.checkInToken = rawToken;
+      registration.checkInTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    }
+
     // Both approved and seat is available: Transition to CONFIRMED & PAID
     registration.registrationStatus = 'CONFIRMED';
     registration.paymentStatus = 'PAID';
@@ -677,16 +686,27 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
 
     await registration.save();
 
-    // Asynchronously dispatch confirmation email
-    if (defaultEmailService && typeof defaultEmailService.sendRegistrationConfirmation === 'function') {
-      defaultEmailService.sendRegistrationConfirmation(registration.email, registration.fullName || registration.name)
+    // Prevent duplicate confirmation emails if already sent
+    if (!registration.confirmationEmailSent && registration.confirmationEmailStatus !== 'SENT') {
+      const baseUrl = process.env.PUBLIC_APP_URL || process.env.BASE_URL || 'https://halalwealth.finance';
+      const checkInUrl = `${baseUrl.replace(/\/$/, '')}/api/investor-mission/checkin/verify/${registration.checkInToken || registration.registrationId}`;
+
+      investorMissionEmailService.sendInvestorMissionConfirmation({
+        recipientEmail: registration.email,
+        participantName: registration.fullName || registration.name,
+        registrationId: registration.registrationId,
+        checkInUrl,
+      })
         .then(() => {
           registration.confirmationEmailSent = true;
+          registration.confirmationEmailStatus = 'SENT';
           registration.confirmationEmailSentAt = new Date();
+          registration.confirmationEmailLastError = null;
           return registration.save().catch(() => {});
         })
         .catch(err => {
-          console.warn('Failed to send DEC summit confirmation email:', err.message);
+          console.warn('Failed to send Investor Mission confirmation email:', err.message);
+          registration.confirmationEmailStatus = 'FAILED';
           registration.confirmationEmailLastError = String(err.message).slice(0, 500);
           return registration.save().catch(() => {});
         });
@@ -942,6 +962,396 @@ async function addAdminVerificationNotes(req, res) {
   }
 }
 
+/**
+ * Render responsive HTML pass verification card for browser scanning
+ */
+function renderVerificationHtml({
+  verified,
+  registrationId,
+  participantName,
+  attendanceStatus,
+  isAlreadyCheckedIn,
+  message,
+}) {
+  const safeName = (participantName || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const safeRegId = (registrationId || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const safeMsg = (message || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  const badgeColor = verified ? (isAlreadyCheckedIn ? '#d97706' : '#16a34a') : '#dc2626';
+  const badgeText = verified ? (isAlreadyCheckedIn ? 'ALREADY CHECKED IN' : 'VALID PASS — CONFIRMED') : 'INVALID / UNCONFIRMED';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Investor Mission 2026 – Check-In Verification</title>
+  <style>
+    body { margin: 0; padding: 20px; background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; display: flex; justify-content: center; align-items: center; min-height: 90vh; }
+    .card { background: #fff; max-width: 440px; width: 100%; border-radius: 16px; box-shadow: 0 10px 25px rgba(5,55,38,0.1); overflow: hidden; border: 1px solid #e2e8f0; text-align: center; }
+    .header { background: #053726; color: #fff; padding: 24px 20px; }
+    .header h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: 1px; color: #80df35; text-transform: uppercase; }
+    .header p { margin: 0; font-size: 13px; color: #d8ae54; }
+    .body { padding: 28px 24px; }
+    .badge { display: inline-block; padding: 6px 14px; border-radius: 20px; color: #fff; font-size: 12px; font-weight: 700; background: ${badgeColor}; margin-bottom: 20px; letter-spacing: 0.5px; }
+    .name { font-size: 20px; font-weight: 800; color: #053726; margin: 0 0 6px; }
+    .reg-id { font-size: 14px; color: #64748b; font-weight: 600; margin: 0 0 20px; }
+    .details { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin: 0 0 20px; text-align: left; font-size: 13px; line-height: 1.8; }
+    .details strong { color: #053726; }
+    .instructions { font-size: 12px; color: #64748b; line-height: 1.5; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>Investor Mission 2026</h1>
+      <p>The Halal Way of Investing</p>
+    </div>
+    <div class="body">
+      <div class="badge">${badgeText}</div>
+      ${verified ? `
+        <div class="name">${safeName}</div>
+        <div class="reg-id">Registration ID: <strong>${safeRegId}</strong></div>
+        <div class="details">
+          <div><strong>Event:</strong> Investor Mission 2026</div>
+          <div><strong>Date:</strong> Sunday, 06 December 2026</div>
+          <div><strong>Venue:</strong> Siruthuli Noyyal Life Centre</div>
+          <div><strong>Address:</strong> Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023, India.</div>
+          <div style="margin-top: 6px;">
+            <a href="https://maps.google.com/?q=Siruthuli+Noyyal+Life+Centre,+Ukkadam+Sungam+Bypass+Rd,+Shanmuga+Nagar,+Ramanathapuram,+Coimbatore,+Tamil+Nadu+641023" target="_blank" style="color: #053726; font-weight: 700; text-decoration: underline; font-size: 12px;">
+              📍 Open in Google Maps &amp; Get Directions &rarr;
+            </a>
+          </div>
+          <div style="margin-top: 6px;"><strong>Status:</strong> ${isAlreadyCheckedIn ? 'Checked-In' : 'Confirmed Attendee'}</div>
+        </div>
+        <p class="instructions">Please present this screen or your email QR code to the registration desk upon entrance.</p>
+      ` : `
+        <div style="color: #dc2626; font-weight: 600; margin-bottom: 12px;">Verification Failed</div>
+        <p style="color: #64748b; font-size: 14px; margin: 0 0 16px;">${safeMsg || 'This check-in pass could not be verified.'}</p>
+        <p class="instructions">If you believe this is an error, please visit the event help desk with your registration details.</p>
+      `}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * GET /api/investor-mission/checkin/verify/:token
+ * Public endpoint to verify a scanned check-in QR code token.
+ * Returns safe attendee verification details without exposing private PII.
+ */
+async function verifyCheckInToken(req, res) {
+  try {
+    const rawToken = String(req.params.token || '').trim();
+    if (!rawToken) {
+      return res.status(400).json({ success: false, verified: false, message: 'Check-in token is missing.' });
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const registration = await SummitRegistration.findOne({
+      $or: [
+        { checkInTokenHash: tokenHash },
+        { checkInToken: rawToken },
+        { registrationId: rawToken.toUpperCase() },
+      ],
+    }).lean();
+
+    const acceptsHtml = req.accepts(['json', 'html']) === 'html';
+
+    if (!registration) {
+      if (acceptsHtml) {
+        return res.status(404).send(renderVerificationHtml({ verified: false, message: 'Invalid or unrecognized check-in token.' }));
+      }
+      return res.status(404).json({ success: false, verified: false, message: 'Invalid or unrecognized check-in token.' });
+    }
+
+    const isConfirmed = (registration.registrationApproved && registration.paymentApproved) ||
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.status === 'Confirmed' && registration.paymentStatus === 'PAID') ||
+      registration.status === 'Checked-In';
+
+    if (!isConfirmed) {
+      if (acceptsHtml) {
+        return res.status(400).send(renderVerificationHtml({
+          verified: false,
+          registrationId: registration.registrationId,
+          participantName: registration.fullName || registration.name,
+          message: 'Registration is not confirmed or ₹500 payment is pending verification.',
+        }));
+      }
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        registrationId: registration.registrationId,
+        participantName: registration.fullName || registration.name,
+        message: 'Registration is not confirmed or ₹500 payment is pending verification.',
+      });
+    }
+
+    const isCheckedIn = registration.attendanceStatus === 'CHECKED_IN' || registration.status === 'Checked-In';
+
+    if (acceptsHtml) {
+      return res.send(renderVerificationHtml({
+        verified: true,
+        registrationId: registration.registrationId,
+        participantName: registration.fullName || registration.name,
+        attendanceStatus: registration.attendanceStatus || (isCheckedIn ? 'CHECKED_IN' : 'NOT_CHECKED_IN'),
+        checkedInAt: registration.checkedInAt,
+        isAlreadyCheckedIn: isCheckedIn,
+      }));
+    }
+
+    return res.json({
+      success: true,
+      verified: true,
+      registrationId: registration.registrationId,
+      participantName: registration.fullName || registration.name,
+      attendanceStatus: registration.attendanceStatus || (isCheckedIn ? 'CHECKED_IN' : 'NOT_CHECKED_IN'),
+      checkedInAt: registration.checkedInAt,
+      isAlreadyCheckedIn: isCheckedIn,
+      paymentStatus: registration.paymentStatus,
+      status: registration.registrationStatus,
+    });
+  } catch (error) {
+    console.error('Error verifying check-in token:', error);
+    return res.status(500).json({ success: false, message: 'Server error verifying check-in token.' });
+  }
+}
+
+/**
+ * POST /api/admin/investor-mission/checkin
+ * Admin-protected check-in: verifies attendee and marks attendance status to CHECKED_IN.
+ * Prevents duplicate check-ins.
+ */
+async function checkInParticipant(req, res) {
+  try {
+    const { token, registrationId } = req.body;
+    const lookupKey = String(token || registrationId || '').trim();
+
+    if (!lookupKey) {
+      return res.status(400).json({ success: false, message: 'Token or Registration ID is required.' });
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(lookupKey).digest('hex');
+    const registration = await SummitRegistration.findOne({
+      $or: [
+        { checkInTokenHash: tokenHash },
+        { checkInToken: lookupKey },
+        { registrationId: lookupKey.toUpperCase() },
+      ],
+    });
+
+    if (!registration) {
+      return res.status(404).json({ success: false, message: 'Participant registration not found.' });
+    }
+
+    // Verify confirmation and payment
+    const isConfirmed = (registration.registrationApproved && registration.paymentApproved) ||
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.status === 'Confirmed' && registration.paymentStatus === 'PAID') ||
+      registration.status === 'Checked-In';
+
+    if (!isConfirmed) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot check in: Participant registration is not confirmed or payment is pending.',
+        registrationId: registration.registrationId,
+        participantName: registration.fullName || registration.name,
+      });
+    }
+
+    // Prevent duplicate check-in
+    if (registration.attendanceStatus === 'CHECKED_IN' || registration.status === 'Checked-In') {
+      return res.status(409).json({
+        success: false,
+        alreadyCheckedIn: true,
+        message: 'Already Checked In',
+        registrationId: registration.registrationId,
+        participantName: registration.fullName || registration.name,
+        checkedInAt: registration.checkedInAt,
+        checkedInBy: registration.checkedInBy,
+      });
+    }
+
+    // Mark check-in
+    registration.attendanceStatus = 'CHECKED_IN';
+    registration.status = 'Checked-In';
+    registration.checkedInAt = new Date();
+    registration.checkedInBy = req.admin?.email || 'admin@halalwealth.finance';
+
+    await registration.save();
+
+    return res.json({
+      success: true,
+      message: 'Check-in successful! Attendee marked as present.',
+      registrationId: registration.registrationId,
+      participantName: registration.fullName || registration.name,
+      checkedInAt: registration.checkedInAt,
+      checkedInBy: registration.checkedInBy,
+      attendanceStatus: 'CHECKED_IN',
+    });
+  } catch (error) {
+    console.error('Error during participant check-in:', error);
+    return res.status(500).json({ success: false, message: 'Server error processing check-in.' });
+  }
+}
+
+/**
+ * GET /api/admin/investor-mission/attendance
+ * Admin-protected: Returns confirmed attendees with attendance statistics.
+ */
+async function getAttendanceStats(req, res) {
+  try {
+    const attendees = await SummitRegistration.find({
+      $or: [
+        { registrationApproved: true, paymentApproved: true },
+        { registrationStatus: 'CONFIRMED' },
+        { status: 'Confirmed' },
+        { status: 'Checked-In' },
+      ],
+    }).sort({ createdAt: -1 });
+
+    const totalConfirmed = attendees.length;
+    const totalCheckedIn = attendees.filter(a => a.attendanceStatus === 'CHECKED_IN' || a.status === 'Checked-In').length;
+    const remainingNotCheckedIn = Math.max(0, totalConfirmed - totalCheckedIn);
+
+    return res.json({
+      success: true,
+      stats: {
+        totalConfirmed,
+        totalCheckedIn,
+        remainingNotCheckedIn,
+      },
+      attendees,
+    });
+  } catch (error) {
+    console.error('Error fetching attendance stats:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch attendance statistics.' });
+  }
+}
+
+/**
+ * GET /api/admin/investor-mission/attendance/export
+ * Admin-protected: Export attendance list as CSV.
+ */
+async function exportAttendanceCsv(req, res) {
+  try {
+    const attendees = await SummitRegistration.find({
+      $or: [
+        { registrationApproved: true, paymentApproved: true },
+        { registrationStatus: 'CONFIRMED' },
+        { status: 'Confirmed' },
+        { status: 'Checked-In' },
+      ],
+    }).sort({ registrationId: 1 }).lean();
+
+    const headers = [
+      'Registration ID',
+      'Full Name',
+      'Email',
+      'Mobile Number',
+      'City',
+      'State',
+      'Payment Status',
+      'Attendance Status',
+      'Checked In At',
+      'Checked In By',
+      'Email Status',
+    ];
+
+    const escapeCsv = (val) => {
+      const str = String(val ?? '').replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = attendees.map(a => [
+      escapeCsv(a.registrationId),
+      escapeCsv(a.fullName || a.name),
+      escapeCsv(a.email),
+      escapeCsv(a.mobileNumber || a.phone),
+      escapeCsv(a.city),
+      escapeCsv(a.state),
+      escapeCsv(a.paymentStatus),
+      escapeCsv(a.attendanceStatus || (a.status === 'Checked-In' ? 'CHECKED_IN' : 'NOT_CHECKED_IN')),
+      escapeCsv(a.checkedInAt ? new Date(a.checkedInAt).toISOString() : ''),
+      escapeCsv(a.checkedInBy || ''),
+      escapeCsv(a.confirmationEmailStatus || (a.confirmationEmailSent ? 'SENT' : 'NOT_SENT')),
+    ].join(','));
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const filename = `investor-mission-attendance-${new Date().toISOString().slice(0, 10)}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csvContent);
+  } catch (error) {
+    console.error('Error exporting attendance CSV:', error);
+    return res.status(500).json({ success: false, message: 'Failed to export attendance CSV.' });
+  }
+}
+
+/**
+ * POST /api/admin/investor-mission/registrations/:registrationId/resend-confirmation
+ * Admin-protected: Retry or resend confirmation email with QR code.
+ */
+async function resendConfirmationEmail(req, res) {
+  try {
+    const { registrationId } = req.params;
+    const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
+
+    if (!registration) {
+      return res.status(404).json({ success: false, message: 'Registration not found.' });
+    }
+
+    const isConfirmed = (registration.registrationApproved && registration.paymentApproved) ||
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.status === 'Confirmed' && registration.paymentStatus === 'PAID') ||
+      registration.status === 'Checked-In';
+
+    if (!isConfirmed) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot send confirmation email: Both registration and ₹500 payment must be approved first.',
+      });
+    }
+
+    if (!registration.checkInTokenHash) {
+      const rawToken = crypto.randomBytes(24).toString('hex');
+      registration.checkInToken = rawToken;
+      registration.checkInTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      await registration.save();
+    }
+
+    const baseUrl = process.env.PUBLIC_APP_URL || process.env.BASE_URL || 'https://halalwealth.finance';
+    const checkInUrl = `${baseUrl.replace(/\/$/, '')}/api/investor-mission/checkin/verify/${registration.checkInToken || registration.registrationId}`;
+
+    await investorMissionEmailService.sendInvestorMissionConfirmation({
+      recipientEmail: registration.email,
+      participantName: registration.fullName || registration.name,
+      registrationId: registration.registrationId,
+      checkInUrl,
+    });
+
+    registration.confirmationEmailSent = true;
+    registration.confirmationEmailStatus = 'SENT';
+    registration.confirmationEmailSentAt = new Date();
+    registration.confirmationEmailLastError = null;
+    await registration.save();
+
+    return res.json({
+      success: true,
+      message: `Confirmation email with check-in QR code resent successfully to ${registration.email}.`,
+    });
+  } catch (error) {
+    console.error('Error resending confirmation email:', error);
+    registration.confirmationEmailStatus = 'FAILED';
+    registration.confirmationEmailLastError = String(error.message).slice(0, 500);
+    await registration.save().catch(() => {});
+    return res.status(500).json({ success: false, message: `Failed to resend confirmation email: ${error.message}` });
+  }
+}
+
 module.exports = {
   calculateActiveSeats,
   getSummitCapacity,
@@ -958,4 +1368,9 @@ module.exports = {
   recordOfflinePayment,
   addAdminVerificationNotes,
   getNextSmallSummitRegistrationId,
+  verifyCheckInToken,
+  checkInParticipant,
+  getAttendanceStats,
+  exportAttendanceCsv,
+  resendConfirmationEmail,
 };

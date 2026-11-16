@@ -106,10 +106,26 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   // Terms and Consent
   termsAccepted: { type: Boolean, default: true },
 
-  // Email Notifications
+  // Email Notifications & Status
+  confirmationEmailStatus: {
+    type: String,
+    enum: ['NOT_SENT', 'SENT', 'FAILED'],
+    default: 'NOT_SENT',
+  },
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
   confirmationEmailLastError: { type: String, default: null },
+
+  // Secure Event Check-In & Attendance
+  checkInToken: { type: String, default: null },
+  checkInTokenHash: { type: String, default: null, trim: true },
+  attendanceStatus: {
+    type: String,
+    enum: ['NOT_CHECKED_IN', 'CHECKED_IN'],
+    default: 'NOT_CHECKED_IN',
+  },
+  checkedInAt: { type: Date, default: null },
+  checkedInBy: { type: String, default: null, trim: true },
 }, { timestamps: true });
 
 // Efficient indexes for capacity calculation and admin search
@@ -118,6 +134,8 @@ smallSummitRegistrationSchema.index({ status: 1 });
 smallSummitRegistrationSchema.index({ paymentMethod: 1 });
 smallSummitRegistrationSchema.index({ registrationStatus: 1 });
 smallSummitRegistrationSchema.index({ registrationApproved: 1, paymentApproved: 1 });
+smallSummitRegistrationSchema.index({ checkInTokenHash: 1 }, { unique: true, sparse: true });
+smallSummitRegistrationSchema.index({ attendanceStatus: 1 });
 smallSummitRegistrationSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model(

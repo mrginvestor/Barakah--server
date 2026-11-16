@@ -15,6 +15,10 @@ const {
   rejectSummitPayment,
   recordOfflinePayment,
   addAdminVerificationNotes,
+  checkInParticipant,
+  getAttendanceStats,
+  exportAttendanceCsv,
+  resendConfirmationEmail,
 } = require('../controllers/summitController');
 const { requireAdmin } = require('../middleware/requireAdmin');
 
@@ -106,6 +110,10 @@ router.post('/investor-mission/registrations/:registrationId/reject-payment', re
 router.post('/investor-mission/registrations/:registrationId/reject', rejectSummitPayment);
 router.post('/investor-mission/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
 router.post('/investor-mission/registrations/:registrationId/notes', addAdminVerificationNotes);
+router.post('/investor-mission/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
+router.post('/investor-mission/checkin', checkInParticipant);
+router.get('/investor-mission/attendance', getAttendanceStats);
+router.get('/investor-mission/attendance/export', exportAttendanceCsv);
 
 // DEC Summit Event Registrations & Multi-Step Verification Operations
 router.get('/dec-summit/stats', getAdminSummitStats);
@@ -119,6 +127,10 @@ router.post('/dec-summit/registrations/:registrationId/reject-payment', rejectSu
 router.post('/dec-summit/registrations/:registrationId/reject', rejectSummitPayment);
 router.post('/dec-summit/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
 router.post('/dec-summit/registrations/:registrationId/notes', addAdminVerificationNotes);
+router.post('/dec-summit/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
+router.post('/dec-summit/checkin', checkInParticipant);
+router.get('/dec-summit/attendance', getAttendanceStats);
+router.get('/dec-summit/attendance/export', exportAttendanceCsv);
 
 // Backward-compatibility aliases for /small-summit/*
 router.get('/small-summit/stats', getAdminSummitStats);
@@ -132,6 +144,10 @@ router.post('/small-summit/registrations/:registrationId/reject-payment', reject
 router.post('/small-summit/registrations/:registrationId/reject', rejectSummitPayment);
 router.post('/small-summit/registrations/:registrationId/record-offline-payment', recordOfflinePayment);
 router.post('/small-summit/registrations/:registrationId/notes', addAdminVerificationNotes);
+router.post('/small-summit/registrations/:registrationId/resend-confirmation', resendConfirmationEmail);
+router.post('/small-summit/checkin', checkInParticipant);
+router.get('/small-summit/attendance', getAttendanceStats);
+router.get('/small-summit/attendance/export', exportAttendanceCsv);
 
 // Backward-compatibility aliases for /summit/*
 router.get('/summit/stats', getAdminSummitStats);
