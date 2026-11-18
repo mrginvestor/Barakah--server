@@ -14,6 +14,39 @@ const investorMissionEmailService = require('../services/investorMissionEmailSer
  */
 async function getNextSmallSummitRegistrationId(model = SummitRegistration) {
   try {
+    if (typeof model.find === 'function') {
+      const docs = await model
+        .find({ registrationId: /^SS26-\d+$/ })
+        .select('registrationId')
+        .lean();
+
+      let maxSeq = 0;
+      if (Array.isArray(docs)) {
+        for (const doc of docs) {
+          const match = String(doc?.registrationId || '').match(/^SS26-(\d+)$/);
+          if (match) {
+            const seq = parseInt(match[1], 10);
+            if (!Number.isNaN(seq) && seq > maxSeq) {
+              maxSeq = seq;
+            }
+          }
+        }
+      }
+
+      let candidateSeq = maxSeq + 1;
+      let candidateId = `SS26-${String(candidateSeq).padStart(5, '0')}`;
+
+      // Guarantee candidate ID does not collide with existing documents
+      if (typeof model.exists === 'function') {
+        while (await model.exists({ registrationId: candidateId })) {
+          candidateSeq += 1;
+          candidateId = `SS26-${String(candidateSeq).padStart(5, '0')}`;
+        }
+      }
+
+      return candidateId;
+    }
+
     if (typeof model.findOne === 'function') {
       const latest = await model
         .findOne({ registrationId: /^SS26-\d+$/ })
@@ -29,11 +62,12 @@ async function getNextSmallSummitRegistrationId(model = SummitRegistration) {
         }
       }
     }
+
     const count = typeof model.countDocuments === 'function' ? await model.countDocuments() : 0;
     return `SS26-${String(count + 1).padStart(5, '0')}`;
   } catch (_) {
-    const random = Math.floor(10000 + Math.random() * 90000);
-    return `SS26-${random}`;
+    const timestampSuffix = Date.now().toString().slice(-5);
+    return `SS26-${timestampSuffix}`;
   }
 }
 
@@ -232,12 +266,104 @@ async function createSummitRegistration(req, res) {
         existing.paymentStatus === 'PAID';
 
       if (isConfirmed) {
-        return res.status(400).json({
-          message: 'This email is already registered and confirmed for Investor Mission 2026.',
+        return res.status(409).json({
+          success: false,
+          code: 'ALREADY_CONFIRMED',
+          message: 'A registration with this email already exists and is confirmed. Please check your existing registration confirmation.',
+          registrationId: existing.registrationId,
         });
       }
 
-      // If already pending payment, avoid creating duplicate registration or duplicate email
+      // Check if registration / payment is under review / verification
+      const isPendingVerification =
+        existing.paymentStatus === 'PENDING_VERIFICATION' ||
+        existing.registrationStatus === 'PENDING_APPROVAL';
+
+      if (isPendingVerification) {
+        return res.status(200).json({
+          success: true,
+          code: 'PENDING_VERIFICATION',
+          message: 'Your registration and payment have already been received and are currently under administrative verification.',
+          registrationId: existing.registrationId,
+          participantName: existing.fullName || existing.name,
+          redirectUrl: `/investor-mission-confirmation/${existing.registrationId}`,
+          registrationStatus: existing.registrationStatus,
+          paymentStatus: existing.paymentStatus,
+        });
+      }
+
+      // If previously rejected, allow re-registration cleanly:
+      const isRejected =
+        existing.registrationStatus === 'REJECTED' ||
+        existing.status === 'Rejected' ||
+        existing.paymentStatus === 'REJECTED';
+
+      if (isRejected) {
+        existing.fullName = cleanName;
+        existing.name = cleanName;
+        existing.mobileNumber = rawMobile;
+        existing.phone = rawMobile;
+        existing.countryCode = '+91';
+        existing.state = String(state).trim();
+        existing.district = String(district).trim();
+        existing.city = String(city).trim();
+        existing.occupation = cleanOccupation;
+        existing.otherOccupation = cleanOccupation === 'Other' ? cleanOtherOccupation : '';
+        existing.organization = String(organization || '').trim();
+        existing.sessionExpectations = cleanExpectations;
+        existing.paymentMethod = cleanPaymentMethod;
+        existing.registrationStatus = 'PENDING_PAYMENT';
+        existing.paymentStatus = 'PENDING_PAYMENT';
+        existing.status = 'Pending';
+        existing.registrationApproved = false;
+        existing.paymentApproved = false;
+        existing.rejectionReason = '';
+        existing.paymentScreenshot = null;
+        existing.paymentScreenshotMimeType = null;
+        existing.paymentScreenshotSize = null;
+        existing.upiTransactionId = null;
+        existing.paymentDate = null;
+        existing.paymentNotes = '';
+        existing.reservationExpiresAt = new Date(Date.now() + SUMMIT_CONFIG.reservationTimeoutMinutes * 60 * 1000);
+        await existing.save();
+
+        investorMissionEmailService.sendInvestorMissionAcknowledgement({
+          recipientEmail: existing.email,
+          participantName: existing.fullName || existing.name,
+          registrationId: existing.registrationId,
+        }).catch(err => console.error('Acknowledgement email error:', err.message));
+
+        return res.status(200).json({
+          success: true,
+          code: 'REGISTRATION_RESET',
+          message: 'Your previous registration was reset. Please proceed to complete UPI payment.',
+          registrationId: existing.registrationId,
+          participantName: existing.fullName || existing.name,
+          paymentMethod: existing.paymentMethod,
+          registrationFee: existing.registrationFee || SUMMIT_CONFIG.registrationFee,
+          redirectUrl: `/investor-mission-payment/${existing.registrationId}`,
+          registrationStatus: existing.registrationStatus,
+          paymentStatus: existing.paymentStatus,
+        });
+      }
+
+      // Otherwise, it is PENDING_PAYMENT / PENDING.
+      // Update details if they updated them on the form, keep existing registrationId:
+      existing.fullName = cleanName;
+      existing.name = cleanName;
+      existing.mobileNumber = rawMobile;
+      existing.phone = rawMobile;
+      existing.state = String(state).trim();
+      existing.district = String(district).trim();
+      existing.city = String(city).trim();
+      existing.occupation = cleanOccupation;
+      existing.otherOccupation = cleanOccupation === 'Other' ? cleanOtherOccupation : '';
+      existing.organization = String(organization || '').trim();
+      existing.sessionExpectations = cleanExpectations;
+      existing.reservationExpiresAt = new Date(Date.now() + SUMMIT_CONFIG.reservationTimeoutMinutes * 60 * 1000);
+      await existing.save();
+
+      // Trigger acknowledgement email if not yet sent
       if (!existing.acknowledgementEmailSent && existing.acknowledgementEmailStatus !== 'SENT') {
         investorMissionEmailService.sendInvestorMissionAcknowledgement({
           recipientEmail: existing.email,
@@ -261,6 +387,7 @@ async function createSummitRegistration(req, res) {
 
       return res.status(200).json({
         success: true,
+        code: 'PENDING_PAYMENT',
         message: 'Existing registration retrieved. Please complete your UPI payment.',
         registrationId: existing.registrationId,
         participantName: existing.fullName || existing.name,
@@ -272,42 +399,68 @@ async function createSummitRegistration(req, res) {
       });
     }
 
-    // Generate unique registration ID (e.g. SS26-00001)
-    const registrationId = await getNextSmallSummitRegistrationId(SummitRegistration);
-    const expiresAt = cleanPaymentMethod === 'ONLINE'
-      ? new Date(Date.now() + SUMMIT_CONFIG.reservationTimeoutMinutes * 60 * 1000)
-      : null;
+    // Generate unique registration ID with retry loop to handle concurrent submissions
+    let registration = null;
+    let attempts = 0;
+    const maxAttempts = 5;
 
-    const registration = new SummitRegistration({
-      registrationId,
-      fullName: cleanName,
-      name: cleanName,
-      email: cleanEmail,
-      mobileNumber: rawMobile,
-      phone: rawMobile,
-      countryCode: '+91',
-      state: String(state).trim(),
-      district: String(district).trim(),
-      city: String(city).trim(),
-      occupation: cleanOccupation,
-      otherOccupation: cleanOccupation === 'Other' ? cleanOtherOccupation : '',
-      organization: String(organization || '').trim(),
-      sessionExpectations: cleanExpectations,
-      registrationFee: SUMMIT_CONFIG.registrationFee,
-      paymentAmount: SUMMIT_CONFIG.registrationFee,
-      paymentMethod: cleanPaymentMethod,
-      registrationStatus: 'PENDING_PAYMENT',
-      paymentStatus: cleanPaymentMethod === 'ONLINE' ? 'PENDING_PAYMENT' : 'PENDING_OFFLINE_PAYMENT',
-      status: 'Pending',
-      registrationApproved: false,
-      paymentApproved: false,
-      reservationExpiresAt: expiresAt,
-      termsAccepted: true,
-      acknowledgementEmailStatus: 'NOT_SENT',
-      acknowledgementEmailSent: false,
-    });
+    while (!registration && attempts < maxAttempts) {
+      attempts += 1;
+      const registrationId = await getNextSmallSummitRegistrationId(SummitRegistration);
+      const expiresAt = cleanPaymentMethod === 'ONLINE'
+        ? new Date(Date.now() + SUMMIT_CONFIG.reservationTimeoutMinutes * 60 * 1000)
+        : null;
 
-    await registration.save();
+      const candidateRegistration = new SummitRegistration({
+        registrationId,
+        fullName: cleanName,
+        name: cleanName,
+        email: cleanEmail,
+        mobileNumber: rawMobile,
+        phone: rawMobile,
+        countryCode: '+91',
+        state: String(state).trim(),
+        district: String(district).trim(),
+        city: String(city).trim(),
+        occupation: cleanOccupation,
+        otherOccupation: cleanOccupation === 'Other' ? cleanOtherOccupation : '',
+        organization: String(organization || '').trim(),
+        sessionExpectations: cleanExpectations,
+        registrationFee: SUMMIT_CONFIG.registrationFee,
+        paymentAmount: SUMMIT_CONFIG.registrationFee,
+        paymentMethod: cleanPaymentMethod,
+        registrationStatus: 'PENDING_PAYMENT',
+        paymentStatus: cleanPaymentMethod === 'ONLINE' ? 'PENDING_PAYMENT' : 'PENDING_OFFLINE_PAYMENT',
+        status: 'Pending',
+        registrationApproved: false,
+        paymentApproved: false,
+        reservationExpiresAt: expiresAt,
+        termsAccepted: true,
+        acknowledgementEmailStatus: 'NOT_SENT',
+        acknowledgementEmailSent: false,
+      });
+
+      try {
+        await candidateRegistration.save();
+        registration = candidateRegistration;
+      } catch (saveError) {
+        if (
+          saveError.code === 11000 &&
+          (saveError.keyPattern?.registrationId || (saveError.message && saveError.message.includes('registrationId')))
+        ) {
+          console.warn(`[InvestorMission] Registration ID collision for ${registrationId}. Retrying (attempt ${attempts}/${maxAttempts})...`);
+          continue;
+        }
+        throw saveError;
+      }
+    }
+
+    if (!registration) {
+      return res.status(500).json({
+        success: false,
+        message: 'Could not generate a unique registration ID due to high concurrent volume. Please try again.',
+      });
+    }
 
     // Trigger Registration Received Acknowledgement Email immediately after MongoDB save
     if (!registration.acknowledgementEmailSent && registration.acknowledgementEmailStatus !== 'SENT') {
@@ -348,9 +501,29 @@ async function createSummitRegistration(req, res) {
   } catch (error) {
     console.error('Error creating summit registration:', error);
     if (error.code === 11000) {
-      return res.status(400).json({ message: 'A registration with this email or ID already exists.' });
+      if (error.keyPattern?.email || (error.message && error.message.includes('email'))) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_EMAIL',
+          message: 'A registration with this email address already exists. Please continue with your existing registration.',
+        });
+      }
+      if (error.keyPattern?.registrationId || (error.message && error.message.includes('registrationId'))) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_ID',
+          message: 'A registration sequence conflict occurred. Please submit again.',
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'A registration with this information already exists.',
+      });
     }
-    return res.status(500).json({ message: 'Could not complete registration. Please try again.' });
+    return res.status(500).json({
+      success: false,
+      message: 'Could not complete registration. Please try again.',
+    });
   }
 }
 

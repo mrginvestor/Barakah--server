@@ -127,9 +127,9 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   acknowledgementEmailSentAt: { type: Date, default: null },
   acknowledgementEmailLastError: { type: String, default: null },
 
-  // Secure Event Check-In & Attendance
-  checkInToken: { type: String, default: null },
-  checkInTokenHash: { type: String, default: null, trim: true },
+  // Secure Event Check-In & Attendance (assigned only upon final admin approval)
+  checkInToken: { type: String, trim: true },
+  checkInTokenHash: { type: String, trim: true },
   attendanceStatus: {
     type: String,
     enum: ['NOT_CHECKED_IN', 'CHECKED_IN'],
@@ -140,12 +140,19 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Efficient indexes for capacity calculation and admin search
+smallSummitRegistrationSchema.index({ email: 1 });
 smallSummitRegistrationSchema.index({ paymentStatus: 1, reservationExpiresAt: 1 });
 smallSummitRegistrationSchema.index({ status: 1 });
 smallSummitRegistrationSchema.index({ paymentMethod: 1 });
 smallSummitRegistrationSchema.index({ registrationStatus: 1 });
 smallSummitRegistrationSchema.index({ registrationApproved: 1, paymentApproved: 1 });
-smallSummitRegistrationSchema.index({ checkInTokenHash: 1 }, { unique: true, sparse: true });
+smallSummitRegistrationSchema.index(
+  { checkInTokenHash: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { checkInTokenHash: { $type: 'string' } },
+  }
+);
 smallSummitRegistrationSchema.index({ attendanceStatus: 1 });
 smallSummitRegistrationSchema.index({ createdAt: -1 });
 
