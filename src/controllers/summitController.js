@@ -196,8 +196,22 @@ async function createSummitRegistration(req, res) {
       return res.status(400).json({ message: 'You must agree to the Terms & Conditions and Privacy Policy.' });
     }
 
-    // 8. Payment Method: ONLINE or OFFLINE
-    const cleanPaymentMethod = String(paymentMethod || 'ONLINE').toUpperCase() === 'OFFLINE' ? 'OFFLINE' : 'ONLINE';
+    // 8. Payment Method: Online Payment (UPI) is mandatory for Investor Mission 2026
+    if (paymentMethod && String(paymentMethod).trim().toUpperCase() === 'OFFLINE') {
+      return res.status(400).json({
+        message: 'Offline payment is no longer available for Investor Mission 2026. Online UPI payment is required.',
+        field: 'paymentMethod',
+      });
+    }
+
+    if (paymentMethod && String(paymentMethod).trim().toUpperCase() !== 'ONLINE') {
+      return res.status(400).json({
+        message: 'Invalid payment method. Only Online UPI payment is accepted.',
+        field: 'paymentMethod',
+      });
+    }
+
+    const cleanPaymentMethod = 'ONLINE';
 
     // 9. Capacity Check (50 confirmed seats max)
     const capacity = await calculateActiveSeats(SummitRegistration);
@@ -208,7 +222,7 @@ async function createSummitRegistration(req, res) {
       });
     }
 
-    // 10. Duplicate Check within DEC Summit
+    // 10. Duplicate Check within Investor Mission / DEC Summit
     const existing = await SummitRegistration.findOne({ email: cleanEmail });
     if (existing) {
       const isConfirmed =
@@ -219,9 +233,43 @@ async function createSummitRegistration(req, res) {
 
       if (isConfirmed) {
         return res.status(400).json({
-          message: 'This email is already registered and confirmed for the DEC Summit.',
+          message: 'This email is already registered and confirmed for Investor Mission 2026.',
         });
       }
+
+      // If already pending payment, avoid creating duplicate registration or duplicate email
+      if (!existing.acknowledgementEmailSent && existing.acknowledgementEmailStatus !== 'SENT') {
+        investorMissionEmailService.sendInvestorMissionAcknowledgement({
+          recipientEmail: existing.email,
+          participantName: existing.fullName || existing.name,
+          registrationId: existing.registrationId,
+        })
+          .then(async () => {
+            existing.acknowledgementEmailSent = true;
+            existing.acknowledgementEmailStatus = 'SENT';
+            existing.acknowledgementEmailSentAt = new Date();
+            existing.acknowledgementEmailLastError = null;
+            await existing.save().catch(e => console.error('Save ack status error:', e.message));
+          })
+          .catch(async (emailErr) => {
+            console.error('Failed to send Investor Mission acknowledgement email:', emailErr.message);
+            existing.acknowledgementEmailStatus = 'FAILED';
+            existing.acknowledgementEmailLastError = String(emailErr.message).slice(0, 500);
+            await existing.save().catch(e => console.error('Save ack error status error:', e.message));
+          });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Existing registration retrieved. Please complete your UPI payment.',
+        registrationId: existing.registrationId,
+        participantName: existing.fullName || existing.name,
+        paymentMethod: existing.paymentMethod,
+        registrationFee: existing.registrationFee || SUMMIT_CONFIG.registrationFee,
+        redirectUrl: `/investor-mission-payment/${existing.registrationId}`,
+        registrationStatus: existing.registrationStatus,
+        paymentStatus: existing.paymentStatus,
+      });
     }
 
     // Generate unique registration ID (e.g. SS26-00001)
@@ -248,24 +296,43 @@ async function createSummitRegistration(req, res) {
       registrationFee: SUMMIT_CONFIG.registrationFee,
       paymentAmount: SUMMIT_CONFIG.registrationFee,
       paymentMethod: cleanPaymentMethod,
-      registrationStatus: 'PENDING_APPROVAL',
-      paymentStatus: cleanPaymentMethod === 'ONLINE' ? 'PENDING_VERIFICATION' : 'PENDING_OFFLINE_PAYMENT',
+      registrationStatus: 'PENDING_PAYMENT',
+      paymentStatus: cleanPaymentMethod === 'ONLINE' ? 'PENDING_PAYMENT' : 'PENDING_OFFLINE_PAYMENT',
       status: 'Pending',
       registrationApproved: false,
       paymentApproved: false,
       reservationExpiresAt: expiresAt,
       termsAccepted: true,
+      acknowledgementEmailStatus: 'NOT_SENT',
+      acknowledgementEmailSent: false,
     });
 
     await registration.save();
 
-    const redirectUrl = cleanPaymentMethod === 'ONLINE'
-      ? `/dec-summit-payment/${registration.registrationId}`
-      : `/dec-summit-confirmation/${registration.registrationId}`;
+    // Trigger Registration Received Acknowledgement Email immediately after MongoDB save
+    if (!registration.acknowledgementEmailSent && registration.acknowledgementEmailStatus !== 'SENT') {
+      investorMissionEmailService.sendInvestorMissionAcknowledgement({
+        recipientEmail: registration.email,
+        participantName: registration.fullName || registration.name,
+        registrationId: registration.registrationId,
+      })
+        .then(async () => {
+          registration.acknowledgementEmailSent = true;
+          registration.acknowledgementEmailStatus = 'SENT';
+          registration.acknowledgementEmailSentAt = new Date();
+          registration.acknowledgementEmailLastError = null;
+          await registration.save().catch(e => console.error('Save ack status error:', e.message));
+        })
+        .catch(async (emailErr) => {
+          console.error('Failed to send Investor Mission acknowledgement email:', emailErr.message);
+          registration.acknowledgementEmailStatus = 'FAILED';
+          registration.acknowledgementEmailLastError = String(emailErr.message).slice(0, 500);
+          await registration.save().catch(e => console.error('Save ack error status error:', e.message));
+        });
+    }
 
-    const message = cleanPaymentMethod === 'ONLINE'
-      ? 'Registration details saved. Please complete UPI payment.'
-      : 'Your DEC Summit registration request has been received successfully. Your registration will be confirmed once our team verifies your offline payment.';
+    const redirectUrl = `/investor-mission-payment/${registration.registrationId}`;
+    const message = 'Registration details saved. Please complete UPI payment.';
 
     return res.status(201).json({
       success: true,
@@ -301,7 +368,7 @@ async function getSummitPaymentDetails(req, res) {
     }
 
     const now = new Date();
-    const isExpired = registration.paymentStatus === 'PENDING' &&
+    const isExpired = (registration.paymentStatus === 'PENDING' || registration.paymentStatus === 'PENDING_PAYMENT') &&
       registration.reservationExpiresAt &&
       new Date(registration.reservationExpiresAt) < now;
 
@@ -422,6 +489,7 @@ async function submitSummitPaymentProof(req, res) {
     registration.paymentDate = payDate;
     registration.paymentNotes = String(req.body.paymentNotes || '').trim();
     registration.paymentStatus = 'PENDING_VERIFICATION';
+    registration.registrationStatus = 'PENDING_APPROVAL';
     registration.status = 'Pending';
     registration.rejectionReason = '';
     registration.reservationExpiresAt = null; // Proof submitted; held for admin verification
@@ -485,7 +553,7 @@ async function getAdminSummitRegistrations(req, res) {
       filter.$or = [
         { registrationApproved: false },
         { paymentApproved: false },
-        { registrationStatus: 'PENDING_APPROVAL' },
+        { registrationStatus: { $in: ['PENDING_APPROVAL', 'PENDING_PAYMENT'] } },
       ];
       filter.status = { $nin: ['Rejected'] };
       filter.paymentStatus = { $nin: ['REJECTED'] };
@@ -565,7 +633,7 @@ async function getAdminSummitStats(req, res) {
       SummitRegistration.countDocuments(),
       SummitRegistration.countDocuments(confirmedQuery),
       SummitRegistration.countDocuments({ paymentStatus: 'PENDING_VERIFICATION' }),
-      SummitRegistration.countDocuments({ paymentStatus: 'PENDING' }),
+      SummitRegistration.countDocuments({ paymentStatus: { $in: ['PENDING', 'PENDING_PAYMENT'] } }),
       SummitRegistration.countDocuments({ paymentStatus: 'PENDING_OFFLINE_PAYMENT' }),
       SummitRegistration.countDocuments({
         $or: [{ paymentStatus: 'REJECTED' }, { registrationStatus: 'REJECTED' }, { status: 'Rejected' }],
@@ -578,7 +646,7 @@ async function getAdminSummitStats(req, res) {
             $or: [
               { registrationApproved: false },
               { paymentApproved: false },
-              { registrationStatus: 'PENDING_APPROVAL' },
+              { registrationStatus: { $in: ['PENDING_APPROVAL', 'PENDING_PAYMENT'] } },
             ],
           },
           { status: { $nin: ['Rejected'] } },
@@ -1352,6 +1420,44 @@ async function resendConfirmationEmail(req, res) {
   }
 }
 
+/**
+ * POST /api/admin/investor-mission/registrations/:registrationId/resend-acknowledgement
+ * Admin-protected: Retry or resend the Registration Received acknowledgement email.
+ */
+async function resendAcknowledgementEmail(req, res) {
+  try {
+    const { registrationId } = req.params;
+    const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
+
+    if (!registration) {
+      return res.status(404).json({ success: false, message: 'Registration not found.' });
+    }
+
+    await investorMissionEmailService.sendInvestorMissionAcknowledgement({
+      recipientEmail: registration.email,
+      participantName: registration.fullName || registration.name,
+      registrationId: registration.registrationId,
+    });
+
+    registration.acknowledgementEmailSent = true;
+    registration.acknowledgementEmailStatus = 'SENT';
+    registration.acknowledgementEmailSentAt = new Date();
+    registration.acknowledgementEmailLastError = null;
+    await registration.save();
+
+    return res.json({
+      success: true,
+      message: `Registration acknowledgement email resent successfully to ${registration.email}.`,
+    });
+  } catch (error) {
+    console.error('Error resending acknowledgement email:', error);
+    registration.acknowledgementEmailStatus = 'FAILED';
+    registration.acknowledgementEmailLastError = String(error.message).slice(0, 500);
+    await registration.save().catch(() => {});
+    return res.status(500).json({ success: false, message: `Failed to resend acknowledgement email: ${error.message}` });
+  }
+}
+
 module.exports = {
   calculateActiveSeats,
   getSummitCapacity,
@@ -1373,4 +1479,6 @@ module.exports = {
   getAttendanceStats,
   exportAttendanceCsv,
   resendConfirmationEmail,
+  resendAcknowledgementEmail,
+  evaluateCombinedApproval,
 };

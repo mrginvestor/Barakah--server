@@ -11,7 +11,11 @@ const {
   approveSummitPayment,
   rejectSummitPayment,
   getNextSmallSummitRegistrationId,
+  evaluateCombinedApproval,
+  resendAcknowledgementEmail,
 } = require('./summitController');
+const investorMissionEmailService = require('../services/investorMissionEmailService');
+const SmallSummitRegistration = require('../models/SmallSummitRegistration');
 const { validateImageMagicBytes, UPLOAD_DIR } = require('../middleware/receiptUpload');
 
 test('validateImageMagicBytes detects valid PNG, JPEG and rejects invalid files', () => {
@@ -284,6 +288,70 @@ test('createSummitRegistration strictly validates 10-digit Indian mobile numbers
   }
 });
 
+test('createSummitRegistration rejects offline payment method with 400 Bad Request', async () => {
+  const req = {
+    body: {
+      fullName: 'Ahmad Khan',
+      email: 'ahmad@example.com',
+      mobileNumber: '9876543210',
+      state: 'Tamil Nadu',
+      district: 'Coimbatore',
+      city: 'Coimbatore',
+      occupation: 'Professional',
+      sessionExpectations: 'Looking forward to Shariah investment guidance.',
+      termsAccepted: true,
+      paymentMethod: 'OFFLINE',
+    },
+  };
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status: (code) => {
+      statusCode = code;
+      return {
+        json: (data) => { jsonResponse = data; },
+      };
+    },
+  };
+
+  await createSummitRegistration(req, res);
+  assert.strictEqual(statusCode, 400);
+  assert.strictEqual(jsonResponse.field, 'paymentMethod');
+  assert.strictEqual(jsonResponse.message.includes('Offline payment is no longer available'), true);
+});
+
+test('createSummitRegistration rejects invalid non-online payment methods', async () => {
+  const req = {
+    body: {
+      fullName: 'Ahmad Khan',
+      email: 'ahmad@example.com',
+      mobileNumber: '9876543210',
+      state: 'Tamil Nadu',
+      district: 'Coimbatore',
+      city: 'Coimbatore',
+      occupation: 'Professional',
+      sessionExpectations: 'Looking forward to Shariah investment guidance.',
+      termsAccepted: true,
+      paymentMethod: 'CRYPTO',
+    },
+  };
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status: (code) => {
+      statusCode = code;
+      return {
+        json: (data) => { jsonResponse = data; },
+      };
+    },
+  };
+
+  await createSummitRegistration(req, res);
+  assert.strictEqual(statusCode, 400);
+  assert.strictEqual(jsonResponse.field, 'paymentMethod');
+  assert.strictEqual(jsonResponse.message.includes('Invalid payment method'), true);
+});
+
 test('getNextSmallSummitRegistrationId generates SS26- format correctly', async () => {
   const mockModel = {
     findOne: () => ({
@@ -296,5 +364,360 @@ test('getNextSmallSummitRegistrationId generates SS26- format correctly', async 
   };
   const id = await getNextSmallSummitRegistrationId(mockModel);
   assert.strictEqual(id, 'SS26-00013');
+});
+
+test('SmallSummitRegistration schema defines PENDING_PAYMENT in registrationStatus and paymentStatus enums with default', () => {
+  const regEnumValues = SmallSummitRegistration.schema.path('registrationStatus').enumValues;
+  assert.ok(regEnumValues.includes('PENDING_PAYMENT'), 'registrationStatus should include PENDING_PAYMENT');
+  assert.ok(regEnumValues.includes('PENDING_APPROVAL'), 'registrationStatus should include PENDING_APPROVAL');
+  assert.ok(regEnumValues.includes('CONFIRMED'), 'registrationStatus should include CONFIRMED');
+  assert.strictEqual(SmallSummitRegistration.schema.path('registrationStatus').defaultValue, 'PENDING_PAYMENT');
+
+  const payEnumValues = SmallSummitRegistration.schema.path('paymentStatus').enumValues;
+  assert.ok(payEnumValues.includes('PENDING_PAYMENT'), 'paymentStatus should include PENDING_PAYMENT');
+  assert.ok(payEnumValues.includes('PENDING_VERIFICATION'), 'paymentStatus should include PENDING_VERIFICATION');
+  assert.ok(payEnumValues.includes('PAID'), 'paymentStatus should include PAID');
+  assert.strictEqual(SmallSummitRegistration.schema.path('paymentStatus').defaultValue, 'PENDING_PAYMENT');
+});
+
+test('evaluateCombinedApproval keeps PENDING_APPROVAL when only registration is approved', async () => {
+  let saved = false;
+  const reg = {
+    registrationApproved: true,
+    paymentApproved: false,
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    save: async () => { saved = true; return reg; },
+  };
+  const result = await evaluateCombinedApproval(reg, 'admin@halalwealth.finance', 'Registration looks good');
+  assert.strictEqual(result.confirmed, false);
+  assert.strictEqual(reg.registrationStatus, 'PENDING_APPROVAL');
+  assert.strictEqual(reg.paymentStatus, 'PENDING_VERIFICATION');
+  assert.strictEqual(reg.status, 'Pending');
+  assert.strictEqual(saved, true);
+});
+
+test('evaluateCombinedApproval keeps PENDING_APPROVAL when only payment is approved', async () => {
+  let saved = false;
+  const reg = {
+    registrationApproved: false,
+    paymentApproved: true,
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    save: async () => { saved = true; return reg; },
+  };
+  const result = await evaluateCombinedApproval(reg, 'admin@halalwealth.finance', 'Payment verified in bank');
+  assert.strictEqual(result.confirmed, false);
+  assert.strictEqual(reg.registrationStatus, 'PENDING_APPROVAL');
+  assert.strictEqual(reg.status, 'Pending');
+  assert.strictEqual(saved, true);
+});
+
+test('evaluateCombinedApproval transitions to CONFIRMED and PAID when both are approved', async () => {
+  const origCount = SmallSummitRegistration.countDocuments;
+  SmallSummitRegistration.countDocuments = async () => 10; // 10 confirmed seats
+  try {
+    let saved = false;
+    const reg = {
+      _id: 'reg123',
+      registrationId: 'SS26-00001',
+      fullName: 'Muhammad Ali',
+      email: 'muhammad@example.com',
+      registrationApproved: true,
+      paymentApproved: true,
+      registrationStatus: 'PENDING_APPROVAL',
+      paymentStatus: 'PENDING_VERIFICATION',
+      status: 'Pending',
+      confirmationEmailSent: true, // Mark already sent so it won't trigger network/email in this test
+      confirmationEmailStatus: 'SENT',
+      save: async () => { saved = true; return reg; },
+    };
+
+    const result = await evaluateCombinedApproval(reg, 'admin@halalwealth.finance', 'All approved');
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.confirmed, true);
+    assert.strictEqual(reg.registrationStatus, 'CONFIRMED');
+    assert.strictEqual(reg.paymentStatus, 'PAID');
+    assert.strictEqual(reg.status, 'Confirmed');
+    assert.ok(reg.checkInToken, 'Should generate check-in token');
+    assert.ok(reg.checkInTokenHash, 'Should generate check-in token hash');
+    assert.strictEqual(saved, true);
+  } finally {
+    SmallSummitRegistration.countDocuments = origCount;
+  }
+});
+
+test('createSummitRegistration triggers acknowledgement email and records delivery status', async () => {
+  let ackEmailPayload = null;
+  const origAck = investorMissionEmailService.sendInvestorMissionAcknowledgement;
+  investorMissionEmailService.sendInvestorMissionAcknowledgement = async (payload) => {
+    ackEmailPayload = payload;
+    return { success: true, messageId: '<test-ack-123@halalwealth.finance>' };
+  };
+
+  const origSave = SmallSummitRegistration.prototype.save;
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+
+  SmallSummitRegistration.countDocuments = async () => 5;
+  SmallSummitRegistration.findOne = async () => null;
+  SmallSummitRegistration.prototype.save = async function () {
+    return this;
+  };
+
+  const req = {
+    body: {
+      fullName: 'Salman Faris',
+      email: 'salman.faris@example.com',
+      mobileNumber: '9876543210',
+      state: 'Tamil Nadu',
+      district: 'Coimbatore',
+      city: 'Coimbatore',
+      occupation: 'Employee',
+      sessionExpectations: 'I hope to understand halal wealth management and Shariah investing concepts.',
+      termsAccepted: true,
+      paymentMethod: 'ONLINE',
+    },
+  };
+
+  let statusCode = 200;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await createSummitRegistration(req, res);
+
+    assert.strictEqual(statusCode, 201);
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(jsonResponse.redirectUrl, `/investor-mission-payment/${jsonResponse.registrationId}`);
+
+    // Wait a tick for async email promise resolution
+    await new Promise(r => setTimeout(r, 20));
+
+    assert.ok(ackEmailPayload, 'Acknowledgement email must be triggered');
+    assert.strictEqual(ackEmailPayload.recipientEmail, 'salman.faris@example.com');
+    assert.strictEqual(ackEmailPayload.participantName, 'Salman Faris');
+    assert.strictEqual(ackEmailPayload.registrationId, jsonResponse.registrationId);
+  } finally {
+    investorMissionEmailService.sendInvestorMissionAcknowledgement = origAck;
+    SmallSummitRegistration.prototype.save = origSave;
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+  }
+});
+
+test('createSummitRegistration does not roll back registration if acknowledgement email fails', async () => {
+  const origAck = investorMissionEmailService.sendInvestorMissionAcknowledgement;
+  investorMissionEmailService.sendInvestorMissionAcknowledgement = async () => {
+    throw new Error('SMTP connection timed out');
+  };
+
+  const origSave = SmallSummitRegistration.prototype.save;
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+
+  SmallSummitRegistration.countDocuments = async () => 5;
+  SmallSummitRegistration.findOne = async () => null;
+  let saveCount = 0;
+  SmallSummitRegistration.prototype.save = async function () {
+    saveCount++;
+    return this;
+  };
+
+  const req = {
+    body: {
+      fullName: 'Hameed Raza',
+      email: 'hameed.raza@example.com',
+      mobileNumber: '9876543211',
+      state: 'Tamil Nadu',
+      district: 'Coimbatore',
+      city: 'Coimbatore',
+      occupation: 'Professional',
+      sessionExpectations: 'Looking to learn Shariah screening and wealth structuring methods.',
+      termsAccepted: true,
+      paymentMethod: 'ONLINE',
+    },
+  };
+
+  let statusCode = 200;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await createSummitRegistration(req, res);
+
+    // Registration must succeed with 201 despite email failure
+    assert.strictEqual(statusCode, 201);
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(jsonResponse.redirectUrl, `/investor-mission-payment/${jsonResponse.registrationId}`);
+
+    await new Promise(r => setTimeout(r, 20));
+
+    // Save should have been called (initially and on failure status update)
+    assert.ok(saveCount >= 1);
+  } finally {
+    investorMissionEmailService.sendInvestorMissionAcknowledgement = origAck;
+    SmallSummitRegistration.prototype.save = origSave;
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+  }
+});
+
+test('createSummitRegistration prevents duplicate acknowledgement emails when user resubmits', async () => {
+  let ackCallCount = 0;
+  const origAck = investorMissionEmailService.sendInvestorMissionAcknowledgement;
+  investorMissionEmailService.sendInvestorMissionAcknowledgement = async () => {
+    ackCallCount++;
+    return { success: true };
+  };
+
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+
+  SmallSummitRegistration.countDocuments = async () => 5;
+
+  // Mock an existing pending registration with acknowledgementEmailSent: true
+  const mockExisting = {
+    registrationId: 'SS26-00099',
+    fullName: 'Mohamed Bilal',
+    name: 'Mohamed Bilal',
+    email: 'bilal@example.com',
+    paymentMethod: 'ONLINE',
+    registrationFee: 500,
+    registrationStatus: 'PENDING_PAYMENT',
+    paymentStatus: 'PENDING_PAYMENT',
+    status: 'Pending',
+    registrationApproved: false,
+    paymentApproved: false,
+    acknowledgementEmailSent: true,
+    acknowledgementEmailStatus: 'SENT',
+    save: async () => {},
+  };
+
+  SmallSummitRegistration.findOne = async () => mockExisting;
+
+  const req = {
+    body: {
+      fullName: 'Mohamed Bilal',
+      email: 'bilal@example.com',
+      mobileNumber: '9876543212',
+      state: 'Tamil Nadu',
+      district: 'Coimbatore',
+      city: 'Coimbatore',
+      occupation: 'Student',
+      sessionExpectations: 'Want to understand ethical investing principles and avoid riba.',
+      termsAccepted: true,
+      paymentMethod: 'ONLINE',
+    },
+  };
+
+  let statusCode = 200;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await createSummitRegistration(req, res);
+
+    assert.strictEqual(statusCode, 200);
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(jsonResponse.registrationId, 'SS26-00099');
+    assert.strictEqual(jsonResponse.redirectUrl, '/investor-mission-payment/SS26-00099');
+
+    await new Promise(r => setTimeout(r, 20));
+
+    // Must NOT send duplicate acknowledgement email
+    assert.strictEqual(ackCallCount, 0, 'No duplicate acknowledgement email should be sent');
+  } finally {
+    investorMissionEmailService.sendInvestorMissionAcknowledgement = origAck;
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+  }
+});
+
+test('resendAcknowledgementEmail successfully resends acknowledgement email for admin', async () => {
+  let ackPayload = null;
+  const origAck = investorMissionEmailService.sendInvestorMissionAcknowledgement;
+  investorMissionEmailService.sendInvestorMissionAcknowledgement = async (payload) => {
+    ackPayload = payload;
+    return { success: true };
+  };
+
+  const origFindOne = SmallSummitRegistration.findOne;
+  let saved = false;
+  const mockRegistration = {
+    registrationId: 'SS26-00100',
+    fullName: 'Yusuf Pathan',
+    email: 'yusuf@example.com',
+    acknowledgementEmailSent: false,
+    acknowledgementEmailStatus: 'FAILED',
+    save: async function () {
+      saved = true;
+      return this;
+    },
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+
+  const req = {
+    params: { registrationId: 'SS26-00100' },
+  };
+
+  let statusCode = 200;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await resendAcknowledgementEmail(req, res);
+
+    assert.strictEqual(statusCode, 200);
+    assert.strictEqual(jsonResponse.success, true);
+    assert.match(jsonResponse.message, /resent successfully/);
+    assert.strictEqual(saved, true);
+    assert.strictEqual(mockRegistration.acknowledgementEmailSent, true);
+    assert.strictEqual(mockRegistration.acknowledgementEmailStatus, 'SENT');
+    assert.ok(ackPayload);
+    assert.strictEqual(ackPayload.recipientEmail, 'yusuf@example.com');
+  } finally {
+    investorMissionEmailService.sendInvestorMissionAcknowledgement = origAck;
+    SmallSummitRegistration.findOne = origFindOne;
+  }
 });
 

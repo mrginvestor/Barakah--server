@@ -4,8 +4,10 @@ const {
   createInvestorMissionEmailService,
   buildInvestorMissionConfirmationContent,
   buildInvestorMissionReminderContent,
+  buildInvestorMissionAcknowledgementContent,
   EMAIL_SUBJECT,
   REMINDER_EMAIL_SUBJECT,
+  ACKNOWLEDGEMENT_EMAIL_SUBJECT,
   OFFICIAL_VENUE,
 } = require('./investorMissionEmailService');
 
@@ -131,6 +133,98 @@ describe('investorMissionEmailService', () => {
       assert.ok(qrAttachment, 'Check-in QR code must be attached as CID');
       assert.equal(qrAttachment.filename, 'checkin-qr.png');
       assert.ok(Buffer.isBuffer(qrAttachment.content));
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('builds acknowledgement content matching exact required wording and subject', () => {
+    const ack = buildInvestorMissionAcknowledgementContent({
+      participantName: 'Tariq Mansoor',
+      registrationId: 'SS26-00045',
+      includePoster: true,
+    });
+
+    assert.equal(ack.subject, 'Registration Received Successfully | Investor Mission 2026');
+    assert.equal(ack.subject, ACKNOWLEDGEMENT_EMAIL_SUBJECT);
+
+    // Text assertions
+    assert.match(ack.text, /Assalamu Alaikum Tariq Mansoor,/);
+    assert.match(ack.text, /Thank you for registering for Investor Mission 2026 – The Halal Way of Investing\./);
+    assert.match(ack.text, /Alhamdulillah! We have successfully received your registration details\./);
+    assert.match(ack.text, /Your registration is currently under verification\./);
+    assert.match(ack.text, /Our team will review your registration and payment details\./);
+    assert.match(ack.text, /Once the verification process is completed, we will send you a separate confirmation email as soon as possible to confirm your booking\./);
+    assert.match(ack.text, /Event: Investor Mission 2026 – The Halal Way of Investing/);
+    assert.match(ack.text, /Date: Sunday, 06 December 2026/);
+    assert.match(ack.text, /Venue: https:\/\/maps\.app\.goo\.gl\/4hwJsFTMujiSVDMEA\./);
+    assert.match(ack.text, /Registration ID: SS26-00045/);
+    assert.match(ack.text, /Please keep your Registration ID for future reference\./);
+    assert.match(ack.text, /We appreciate your interest and patience\. We look forward to welcoming you!/);
+    assert.match(ack.text, /JazakAllahu Khairan,/);
+    assert.match(ack.text, /Team Investor Mission 2026/);
+    assert.match(ack.text, /SIO Coimbatore/);
+    assert.match(ack.text, /SOLIDARITY TAMIL NADU/);
+
+    // Must NOT declare booking confirmed or payment approved
+    assert.doesNotMatch(ack.text, /Your registration is confirmed/i);
+    assert.doesNotMatch(ack.text, /payment have been verified/i);
+    assert.doesNotMatch(ack.text, /₹500 payment have been verified/i);
+
+    // HTML assertions
+    assert.match(ack.html, /Registration Received Successfully \| Investor Mission 2026/);
+    assert.match(ack.html, /Assalamu Alaikum Tariq Mansoor,/);
+    assert.match(ack.html, /Your registration is currently under verification\./);
+    assert.match(ack.html, /SS26-00045/);
+    assert.match(ack.html, /https:\/\/maps\.app\.goo\.gl\/4hwJsFTMujiSVDMEA/);
+    assert.match(ack.html, /SIO Coimbatore/);
+    assert.match(ack.html, /SOLIDARITY TAMIL NADU/);
+    assert.match(ack.html, /cid:investor-mission-poster/);
+    // Does NOT contain QR code cid
+    assert.doesNotMatch(ack.html, /cid:participant-checkin-qr/);
+  });
+
+  it('sends acknowledgement email successfully using mocked transporter with poster', async () => {
+    let sentMail = null;
+    const mockTransporter = {
+      sendMail: async (options) => {
+        sentMail = options;
+        return { messageId: '<ack-msg-999@halalwealth.finance>' };
+      },
+    };
+
+    const originalEnv = { ...process.env };
+    process.env.SMTP_HOST = 'smtp.test.com';
+    process.env.SMTP_PORT = '465';
+    process.env.SMTP_USER = 'test@halalwealth.finance';
+    process.env.SMTP_PASS = 'secretpass';
+
+    try {
+      const service = createInvestorMissionEmailService({
+        createTransporter: () => mockTransporter,
+      });
+
+      const res = await service.sendInvestorMissionAcknowledgement({
+        recipientEmail: 'applicant@example.com',
+        participantName: 'Zayd Ibrahim',
+        registrationId: 'SS26-00077',
+      });
+
+      assert.equal(res.success, true);
+      assert.equal(res.messageId, '<ack-msg-999@halalwealth.finance>');
+      assert.ok(sentMail);
+      assert.equal(sentMail.to, 'applicant@example.com');
+      assert.equal(sentMail.subject, 'Registration Received Successfully | Investor Mission 2026');
+      assert.ok(Array.isArray(sentMail.attachments));
+
+      // Should attach the poster
+      const posterAttachment = sentMail.attachments.find(a => a.cid === 'investor-mission-poster');
+      assert.ok(posterAttachment, 'Poster must be attached as CID');
+      assert.equal(posterAttachment.filename, 'investor-mission-poster.jpg');
+
+      // Must NOT attach QR code
+      const qrAttachment = sentMail.attachments.find(a => a.cid === 'participant-checkin-qr');
+      assert.equal(qrAttachment, undefined, 'Check-in QR code must not be in acknowledgement email');
     } finally {
       process.env = originalEnv;
     }

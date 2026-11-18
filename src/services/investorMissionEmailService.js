@@ -9,6 +9,7 @@ const POSTER_CID = 'investor-mission-poster';
 const QR_CID = 'participant-checkin-qr';
 const EMAIL_SUBJECT = 'Your Registration is Confirmed | Investor Mission 2026 – Halal Wealth';
 const REMINDER_EMAIL_SUBJECT = 'Event Reminder: Investor Mission 2026 is Tomorrow | Halal Wealth';
+const ACKNOWLEDGEMENT_EMAIL_SUBJECT = 'Registration Received Successfully | Investor Mission 2026';
 
 const OFFICIAL_VENUE = {
   name: 'Siruthuli Noyyal Life Centre',
@@ -478,6 +479,172 @@ Website: https://halalwealth.finance`;
 }
 
 /**
+ * Build HTML and Plaintext content for Investor Mission 2026 Registration Acknowledgement Email
+ */
+function buildInvestorMissionAcknowledgementContent({
+  participantName,
+  registrationId,
+  includePoster = true,
+}) {
+  const safeName = escapeHtml(participantName || 'Valued Participant');
+  const safeRegId = escapeHtml(registrationId || 'Pending');
+  const mapsUrl = 'https://maps.app.goo.gl/4hwJsFTMujiSVDMEA';
+
+  const text = `Assalamu Alaikum ${participantName || 'Valued Participant'},
+
+Thank you for registering for Investor Mission 2026 – The Halal Way of Investing.
+
+Alhamdulillah! We have successfully received your registration details.
+
+Your registration is currently under verification. Our team will review your registration and payment details. Once the verification process is completed, we will send you a separate confirmation email as soon as possible to confirm your booking.
+
+Event Details
+
+- Event: Investor Mission 2026 – The Halal Way of Investing
+- Date: Sunday, 06 December 2026
+- Venue: ${mapsUrl}.
+- Registration ID: ${registrationId}
+
+Please keep your Registration ID for future reference.
+
+We appreciate your interest and patience. We look forward to welcoming you!
+
+JazakAllahu Khairan,
+
+Team Investor Mission 2026
+SIO Coimbatore
+SOLIDARITY TAMIL NADU`;
+
+  const posterImgHtml = includePoster
+    ? `
+      <div style="margin:24px 0;text-align:center;">
+        <img src="cid:${POSTER_CID}" alt="Investor Mission 2026 – The Halal Way of Investing" style="width:100%;max-width:520px;height:auto;border-radius:10px;border:1px solid #e2e8f0;display:block;margin:0 auto;box-shadow:0 4px 12px rgba(5,55,38,0.08);" />
+      </div>`
+    : '';
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${ACKNOWLEDGEMENT_EMAIL_SUBJECT}</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f1f5f9;color:#1e293b;font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.6;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;background-color:#f1f5f9;width:100%;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:collapse;width:100%;max-width:600px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;box-shadow:0 10px 25px rgba(5,55,38,0.06);">
+            
+            <!-- Header Brand Banner -->
+            <tr>
+              <td style="padding:32px 28px 24px;background-color:#064B36;text-align:center;border-bottom:3px solid #80DF35;">
+                <p style="margin:0 0 6px;color:#80DF35;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">SIO Coimbatore &bull; SOLIDARITY TAMIL NADU</p>
+                <h1 style="margin:0 0 6px;color:#ffffff;font-size:24px;line-height:1.25;font-weight:800;letter-spacing:0.5px;">INVESTOR MISSION 2026</h1>
+                <p style="margin:0;color:#D8AE54;font-size:13.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">THE HALAL WAY OF INVESTING</p>
+              </td>
+            </tr>
+
+            <!-- Main Body -->
+            <tr>
+              <td style="padding:32px 28px;color:#1e293b;font-size:15px;line-height:1.7;">
+                <p style="margin:0 0 16px;font-size:16px;color:#064B36;font-weight:700;">Assalamu Alaikum ${safeName},</p>
+                
+                <p style="margin:0 0 14px;color:#334155;">
+                  Thank you for registering for <strong>Investor Mission 2026 – The Halal Way of Investing</strong>.
+                </p>
+
+                <p style="margin:0 0 16px;font-size:17px;color:#064B36;font-weight:800;">
+                  Alhamdulillah! We have successfully received your registration details.
+                </p>
+                
+                <!-- Verification Notice Alert Box -->
+                <div style="background-color:#f0fdf4;border:1px solid #80DF35;border-left:5px solid #138C3B;padding:16px 20px;margin:20px 0;border-radius:6px;">
+                  <p style="margin:0;color:#064B36;font-size:14.5px;line-height:1.6;">
+                    <strong>Your registration is currently under verification.</strong> Our team will review your registration and payment details. Once the verification process is completed, we will send you a separate confirmation email as soon as possible to confirm your booking.
+                  </p>
+                </div>
+
+                <!-- Registration ID Highlight Box -->
+                <div style="background-color:#f8fafc;border:2px dashed #064B36;border-radius:12px;padding:20px;margin:24px 0;text-align:center;">
+                  <span style="display:inline-block;background-color:#e2e8f0;color:#475569;font-size:11px;font-weight:800;letter-spacing:1.5px;padding:3px 10px;border-radius:12px;text-transform:uppercase;">Registration ID</span>
+                  <div style="margin:10px 0 6px;font-size:26px;font-weight:800;color:#064B36;letter-spacing:1.5px;font-family:'Plus Jakarta Sans',monospace,sans-serif;">
+                    ${safeRegId}
+                  </div>
+                  <p style="margin:0;font-size:12.5px;color:#64748b;font-weight:500;">
+                    Please keep your Registration ID for future reference.
+                  </p>
+                </div>
+
+                <!-- Event Details Card -->
+                <div style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:22px 24px;margin:24px 0;">
+                  <h2 style="margin:0 0 16px;font-size:15px;font-weight:800;color:#064B36;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;padding-bottom:10px;text-transform:uppercase;">
+                    Event Details
+                  </h2>
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:14px;line-height:1.8;">
+                    <tr>
+                      <td style="padding:6px 0;color:#64748b;width:140px;font-weight:600;vertical-align:top;">Event:</td>
+                      <td style="padding:6px 0;color:#064B36;font-weight:700;vertical-align:top;">Investor Mission 2026 – The Halal Way of Investing</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Date:</td>
+                      <td style="padding:6px 0;color:#1e293b;font-weight:700;vertical-align:top;">Sunday, 06 December 2026</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Venue:</td>
+                      <td style="padding:6px 0;color:#1e293b;vertical-align:top;">
+                        <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" style="color:#138C3B;font-weight:700;text-decoration:underline;">
+                          ${mapsUrl} &rarr;
+                        </a>
+                        <div style="margin-top:2px;font-size:12.5px;color:#64748b;">(Siruthuli Noyyal Life Centre, Coimbatore)</div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Registration ID:</td>
+                      <td style="padding:6px 0;color:#064B36;font-weight:800;font-size:15px;letter-spacing:0.5px;vertical-align:top;">${safeRegId}</td>
+                    </tr>
+                  </table>
+                </div>
+
+                <p style="margin:20px 0;color:#334155;line-height:1.6;">
+                  We appreciate your interest and patience. We look forward to welcoming you!
+                </p>
+
+                <!-- Official Poster -->
+                ${posterImgHtml}
+
+                <div style="margin-top:28px;padding-top:20px;border-top:1px solid #e2e8f0;">
+                  <p style="margin:0 0 12px;color:#064B36;font-weight:700;font-size:15px;">JazakAllahu Khairan,</p>
+                  <p style="margin:0;color:#1e293b;line-height:1.6;">
+                    <strong style="color:#064B36;">Team Investor Mission 2026</strong><br />
+                    SIO Coimbatore<br />
+                    SOLIDARITY TAMIL NADU
+                  </p>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="padding:22px 28px;background-color:#032419;text-align:center;color:#a3cfbb;font-size:12px;line-height:1.6;">
+                <p style="margin:0 0 6px;color:#ffffff;font-weight:700;">INVESTOR MISSION 2026</p>
+                <p style="margin:0 0 8px;">Organized by SIO Coimbatore &bull; SOLIDARITY TAMIL NADU</p>
+                <p style="margin:0;font-size:11px;color:#80df35;">
+                  For registration inquiries or payment support: +91 6380413253 (Anas Rahman H) &bull; info@halalwealth.finance
+                </p>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject: ACKNOWLEDGEMENT_EMAIL_SUBJECT, text, html };
+}
+
+/**
  * Service Factory for Investor Mission Email operations
  */
 function createInvestorMissionEmailService({
@@ -777,11 +944,117 @@ function createInvestorMissionEmailService({
     }
   }
 
+  /**
+   * Send Investor Mission Registration Acknowledgement Email
+   */
+  async function sendInvestorMissionAcknowledgement({
+    recipientEmail,
+    participantName,
+    registrationId,
+  }) {
+    const cleanRecipient = typeof recipientEmail === 'string' ? recipientEmail.trim() : '';
+    if (!cleanRecipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanRecipient) || cleanRecipient.length > 254) {
+      const error = new Error(`Invalid recipient email address: "${cleanRecipient.slice(0, 50)}"`);
+      error.code = 'INVALID_RECIPIENT_EMAIL';
+      throw error;
+    }
+
+    if (!registrationId) {
+      const error = new Error('Registration ID is required to send acknowledgement email.');
+      error.code = 'MISSING_REGISTRATION_ID';
+      throw error;
+    }
+
+    const posterPath = resolvePosterPath();
+    const hasPoster = fs.existsSync(posterPath);
+
+    const messageContent = buildInvestorMissionAcknowledgementContent({
+      participantName,
+      registrationId,
+      includePoster: hasPoster,
+    });
+
+    const environment = process.env;
+    const { fromName, fromAddress } = resolveSenderConfig(environment);
+
+    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
+    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
+    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
+    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
+    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
+
+    const isPort465 = port === 465;
+    const isPort587 = port === 587;
+    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
+    const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
+      error.code = 'EMAIL_CONFIG_INCOMPLETE';
+      throw error;
+    }
+
+    const transportConfig = {
+      host,
+      port,
+      secure,
+      requireTLS,
+      family: 4,
+      pool: true,
+      maxConnections: 3,
+      maxMessages: 100,
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+      auth: { user: username, pass: password },
+    };
+
+    const attachments = [];
+    if (hasPoster) {
+      attachments.push({
+        filename: 'investor-mission-poster.jpg',
+        path: posterPath,
+        cid: POSTER_CID,
+        contentType: 'image/jpeg',
+        contentDisposition: 'inline',
+      });
+    }
+
+    const transporter = getTransporter(transportConfig);
+    const mailOptions = {
+      from: `"${fromName}" <${fromAddress}>`,
+      to: cleanRecipient,
+      subject: messageContent.subject,
+      text: messageContent.text,
+      html: messageContent.html,
+      attachments,
+    };
+
+    try {
+      const info = await transporter.sendMail(mailOptions);
+      logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT', {
+        recipient: cleanRecipient,
+        registrationId,
+        messageId: info.messageId,
+      });
+      return { success: true, messageId: info.messageId };
+    } catch (sendErr) {
+      logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED', {
+        recipient: cleanRecipient,
+        registrationId,
+        error: sendErr.message,
+      });
+      throw sendErr;
+    }
+  }
+
   return {
     sendInvestorMissionConfirmation,
     sendInvestorMissionReminder,
+    sendInvestorMissionAcknowledgement,
     buildInvestorMissionConfirmationContent,
     buildInvestorMissionReminderContent,
+    buildInvestorMissionAcknowledgementContent,
     generateQrBuffer,
     resolvePosterPath,
     resetTransporter,
@@ -794,6 +1067,8 @@ module.exports = defaultInvestorMissionEmailService;
 module.exports.createInvestorMissionEmailService = createInvestorMissionEmailService;
 module.exports.buildInvestorMissionConfirmationContent = buildInvestorMissionConfirmationContent;
 module.exports.buildInvestorMissionReminderContent = buildInvestorMissionReminderContent;
+module.exports.buildInvestorMissionAcknowledgementContent = buildInvestorMissionAcknowledgementContent;
 module.exports.EMAIL_SUBJECT = EMAIL_SUBJECT;
 module.exports.REMINDER_EMAIL_SUBJECT = REMINDER_EMAIL_SUBJECT;
+module.exports.ACKNOWLEDGEMENT_EMAIL_SUBJECT = ACKNOWLEDGEMENT_EMAIL_SUBJECT;
 module.exports.OFFICIAL_VENUE = OFFICIAL_VENUE;

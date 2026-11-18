@@ -51,20 +51,21 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   },
   registrationStatus: {
     type: String,
-    enum: ['PENDING_APPROVAL', 'CONFIRMED', 'REJECTED'],
-    default: 'PENDING_APPROVAL',
+    enum: ['PENDING_PAYMENT', 'PENDING_APPROVAL', 'CONFIRMED', 'REJECTED'],
+    default: 'PENDING_PAYMENT',
   },
   paymentStatus: {
     type: String,
     enum: [
       'PENDING',
+      'PENDING_PAYMENT',
       'PENDING_VERIFICATION',
       'PENDING_OFFLINE_PAYMENT',
       'PAID',
       'REJECTED',
       'EXPIRED',
     ],
-    default: 'PENDING',
+    default: 'PENDING_PAYMENT',
   },
   reservationExpiresAt: { type: Date, default: null },
 
@@ -115,6 +116,16 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
   confirmationEmailLastError: { type: String, default: null },
+
+  // Registration Received Acknowledgement Email
+  acknowledgementEmailStatus: {
+    type: String,
+    enum: ['NOT_SENT', 'SENT', 'FAILED'],
+    default: 'NOT_SENT',
+  },
+  acknowledgementEmailSent: { type: Boolean, default: false },
+  acknowledgementEmailSentAt: { type: Date, default: null },
+  acknowledgementEmailLastError: { type: String, default: null },
 
   // Secure Event Check-In & Attendance
   checkInToken: { type: String, default: null },
