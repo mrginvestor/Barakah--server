@@ -888,44 +888,110 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
       return { success: true, confirmed: true };
     }
 
-    // Atomic capacity check: count confirmed seats excluding this registration
-    const currentConfirmed = await SummitRegistration.countDocuments({
-      _id: { $ne: registration._id },
-      $or: [
-        { registrationApproved: true, paymentApproved: true },
-        { registrationStatus: 'CONFIRMED', paymentStatus: 'PAID' },
-        { status: 'Confirmed', paymentStatus: 'PAID' },
-      ],
-    });
-
     const maxCapacity = SUMMIT_CONFIG.maxCapacity || 50;
-    if (currentConfirmed >= maxCapacity) {
-      return {
-        success: false,
-        error: `DEC Summit capacity (${maxCapacity} seats) has been reached. Cannot confirm additional registrations.`,
-      };
+
+    // Check if MongoDB session / transactions available (e.g. MongoDB Atlas replica set)
+    const mongoose = require('mongoose');
+    let session = null;
+    try {
+      if (mongoose.connection?.readyState === 1 && typeof mongoose.connection.startSession === 'function') {
+        session = await mongoose.connection.startSession();
+      }
+    } catch (_) {
+      session = null;
     }
 
-    // Generate secure check-in token and hash if not already generated
-    if (!registration.checkInTokenHash) {
-      const rawToken = crypto.randomBytes(24).toString('hex');
-      registration.checkInToken = rawToken;
-      registration.checkInTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-    }
+    if (session) {
+      try {
+        session.startTransaction();
+        const currentConfirmed = await SummitRegistration.countDocuments({
+          _id: { $ne: registration._id },
+          $or: [
+            { registrationApproved: true, paymentApproved: true },
+            { registrationStatus: 'CONFIRMED', paymentStatus: 'PAID' },
+            { status: 'Confirmed', paymentStatus: 'PAID' },
+          ],
+        }).session(session);
 
-    // Both approved and seat is available: Transition to CONFIRMED & PAID
-    registration.registrationStatus = 'CONFIRMED';
-    registration.paymentStatus = 'PAID';
-    registration.status = 'Confirmed';
-    registration.approvedAt = new Date();
-    registration.paymentVerifiedAt = new Date();
-    registration.paymentVerifiedBy = adminEmail || 'admin@halalwealth.finance';
-    registration.rejectionReason = '';
-    if (adminNotes) {
-      registration.adminNotes = String(adminNotes).trim();
-    }
+        if (currentConfirmed >= maxCapacity) {
+          await session.abortTransaction();
+          session.endSession();
+          return {
+            success: false,
+            capacityReached: true,
+            error: `Investor Mission 2026 capacity (${maxCapacity} confirmed seats) has been reached. Cannot confirm additional registrations.`,
+          };
+        }
 
-    await registration.save();
+        // Generate secure check-in token and hash if not already generated
+        if (!registration.checkInTokenHash) {
+          const rawToken = crypto.randomBytes(24).toString('hex');
+          registration.checkInToken = rawToken;
+          registration.checkInTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        }
+
+        registration.registrationStatus = 'CONFIRMED';
+        registration.paymentStatus = 'PAID';
+        registration.status = 'Confirmed';
+        registration.registrationApproved = true;
+        registration.paymentApproved = true;
+        registration.approvedAt = new Date();
+        registration.paymentVerifiedAt = new Date();
+        registration.paymentVerifiedBy = adminEmail || 'admin@halalwealth.finance';
+        registration.rejectionReason = '';
+        if (adminNotes) {
+          registration.adminNotes = String(adminNotes).trim();
+        }
+
+        await registration.save({ session });
+        await session.commitTransaction();
+        session.endSession();
+      } catch (txError) {
+        if (session) {
+          await session.abortTransaction().catch(() => {});
+          session.endSession();
+        }
+        throw txError;
+      }
+    } else {
+      const currentConfirmed = await SummitRegistration.countDocuments({
+        _id: { $ne: registration._id },
+        $or: [
+          { registrationApproved: true, paymentApproved: true },
+          { registrationStatus: 'CONFIRMED', paymentStatus: 'PAID' },
+          { status: 'Confirmed', paymentStatus: 'PAID' },
+        ],
+      });
+
+      if (currentConfirmed >= maxCapacity) {
+        return {
+          success: false,
+          capacityReached: true,
+          error: `Investor Mission 2026 capacity (${maxCapacity} confirmed seats) has been reached. Cannot confirm additional registrations.`,
+        };
+      }
+
+      if (!registration.checkInTokenHash) {
+        const rawToken = crypto.randomBytes(24).toString('hex');
+        registration.checkInToken = rawToken;
+        registration.checkInTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      }
+
+      registration.registrationStatus = 'CONFIRMED';
+      registration.paymentStatus = 'PAID';
+      registration.status = 'Confirmed';
+      registration.registrationApproved = true;
+      registration.paymentApproved = true;
+      registration.approvedAt = new Date();
+      registration.paymentVerifiedAt = new Date();
+      registration.paymentVerifiedBy = adminEmail || 'admin@halalwealth.finance';
+      registration.rejectionReason = '';
+      if (adminNotes) {
+        registration.adminNotes = String(adminNotes).trim();
+      }
+
+      await registration.save();
+    }
 
     // Prevent duplicate confirmation emails if already sent
     if (!registration.confirmationEmailSent && registration.confirmationEmailStatus !== 'SENT') {
@@ -1009,6 +1075,8 @@ async function approveSummitRegistration(req, res) {
 /**
  * POST /api/admin/summit/registrations/:registrationId/approve and /approve-payment
  * Action 2: Admin approves payment (Online UPI or Offline).
+ * Automatically marks registration as CONFIRMED, reserves 1 seat in Investor Mission 2026,
+ * and triggers final seat confirmation email with check-in QR code.
  */
 async function approveSummitPayment(req, res) {
   try {
@@ -1020,19 +1088,34 @@ async function approveSummitPayment(req, res) {
       return res.status(404).json({ message: 'Registration not found.' });
     }
 
+    // 1. Verify required registration fields are satisfied:
+    const cleanName = String(registration.fullName || registration.name || '').trim();
+    if (!cleanName || cleanName.length < 3) {
+      return res.status(400).json({ message: 'Cannot approve: Participant name is invalid or missing.' });
+    }
+    if (!registration.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(registration.email)) {
+      return res.status(400).json({ message: 'Cannot approve: Participant email is invalid.' });
+    }
+
+    // 2. Mark both payment and registration approved for single-click Investor Mission 2026 approval
     registration.paymentApproved = true;
     registration.paymentApprovedAt = new Date();
     registration.paymentApprovedBy = req.admin?.email || 'admin@halalwealth.finance';
+    registration.registrationApproved = true;
+    registration.registrationApprovedAt = registration.registrationApprovedAt || new Date();
+    registration.registrationApprovedBy = req.admin?.email || 'admin@halalwealth.finance';
     registration.rejectionReason = '';
 
     const approvalResult = await evaluateCombinedApproval(registration, req.admin?.email, adminNotes);
     if (!approvalResult.success) {
-      return res.status(400).json({ message: approvalResult.error });
+      return res.status(400).json({
+        success: false,
+        capacityReached: Boolean(approvalResult.capacityReached),
+        message: approvalResult.error,
+      });
     }
 
-    const message = approvalResult.confirmed
-      ? 'Payment and registration approved! Participant seat is now CONFIRMED.'
-      : 'Payment approved. Participant seat will be confirmed once registration details are also approved.';
+    const message = 'Payment verified and seat officially CONFIRMED! Final seat confirmation email is being dispatched.';
 
     return res.json({
       success: true,
@@ -1082,6 +1165,7 @@ async function rejectSummitRegistration(req, res) {
 /**
  * POST /api/admin/summit/registrations/:registrationId/reject and /reject-payment
  * Action 4: Admin rejects payment proof with a reason.
+ * Unconfirms seat, sets paymentStatus to REJECTED, and does not send seat confirmation email.
  */
 async function rejectSummitPayment(req, res) {
   try {
@@ -1094,12 +1178,10 @@ async function rejectSummitPayment(req, res) {
     }
 
     registration.paymentApproved = false;
+    registration.registrationApproved = false;
     registration.paymentStatus = 'REJECTED';
-    // If it was previously confirmed, drop back to Pending
-    if (registration.registrationStatus === 'CONFIRMED') {
-      registration.registrationStatus = 'PENDING_APPROVAL';
-      registration.status = 'Pending';
-    }
+    registration.registrationStatus = 'REJECTED';
+    registration.status = 'Rejected';
     registration.rejectionReason = String(reason || 'Payment verification failed. Please verify your reference or re-upload a clear receipt.').trim();
     if (adminNotes) registration.adminNotes = String(adminNotes).trim();
 
@@ -1107,7 +1189,7 @@ async function rejectSummitPayment(req, res) {
 
     return res.json({
       success: true,
-      message: 'Payment rejected. Participant can submit corrected payment proof on their payment page.',
+      message: 'Payment rejected. Participant registration remains unconfirmed.',
       data: registration,
     });
   } catch (error) {

@@ -31,7 +31,22 @@ describe('investorMissionEmailService', () => {
     // Official Venue assertions in text
     assert.match(content.text, /Siruthuli Noyyal Life Centre/);
     assert.match(content.text, /Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023/);
-    assert.match(content.text, /maps\.google\.com/);
+    assert.match(content.text, /maps\.(app\.goo\.gl|google\.com)/);
+
+    // Negative assertions for branding purity
+    assert.doesNotMatch(content.subject, /Halal Wealth/i);
+    assert.doesNotMatch(content.text, /Halal Wealth/i);
+    assert.doesNotMatch(content.html, /Halal Wealth/i);
+    assert.doesNotMatch(content.text, /Verified & Paid/i);
+    assert.doesNotMatch(content.html, /Verified & Paid/i);
+
+    // Fee displayed cleanly without payment status descriptions
+    assert.match(content.text, /Registration Fee: ₹500/);
+    assert.doesNotMatch(content.text, /Registration Fee: ₹500 \(/i);
+
+    // Signatures
+    assert.match(content.text, /Team Investor Mission 2026/);
+    assert.match(content.text, /SIO Coimbatore/);
 
     // HTML assertions
     assert.match(content.html, /Assalamu Alaikum Ahmed Khan/);
@@ -40,7 +55,7 @@ describe('investorMissionEmailService', () => {
     assert.match(content.html, /SS26-00012/);
     assert.match(content.html, /Siruthuli Noyyal Life Centre/);
     assert.match(content.html, /Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023/);
-    assert.match(content.html, /maps\.google\.com/);
+    assert.match(content.html, /maps\.(app\.goo\.gl|google\.com)/);
     assert.match(content.html, /Open in Google Maps &amp; Get Directions/);
     assert.match(content.html, /cid:investor-mission-poster/);
     assert.match(content.html, /cid:participant-checkin-qr/);
@@ -57,13 +72,13 @@ describe('investorMissionEmailService', () => {
     assert.match(reminder.text, /Assalamu Alaikum Ahmed Khan/);
     assert.match(reminder.text, /Siruthuli Noyyal Life Centre/);
     assert.match(reminder.text, /Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023/);
-    assert.match(reminder.text, /maps\.google\.com/);
+    assert.match(reminder.text, /maps\.(app\.goo\.gl|google\.com)/);
     assert.match(reminder.text, /SS26-00012/);
 
     // HTML assertions
     assert.match(reminder.html, /Siruthuli Noyyal Life Centre/);
     assert.match(reminder.html, /Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023/);
-    assert.match(reminder.html, /maps\.google\.com/);
+    assert.match(reminder.html, /maps\.(app\.goo\.gl|google\.com)/);
     assert.match(reminder.html, /Open in Google Maps &amp; Get Directions/);
     assert.match(reminder.html, /cid:participant-checkin-qr/);
   });

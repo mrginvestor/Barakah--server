@@ -901,4 +901,236 @@ test('createSummitRegistration resets rejected registration and allows re-regist
   }
 });
 
+test('approveSummitPayment verifies payment, marks seat CONFIRMED, generates check-in token and triggers confirmation email', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+  const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
+
+  let emailSentPayload = null;
+  investorMissionEmailService.sendInvestorMissionConfirmation = async (payload) => {
+    emailSentPayload = payload;
+    return { success: true };
+  };
+
+  let saved = false;
+  const mockRegistration = {
+    _id: 'mock-reg-id-123',
+    registrationId: 'SS26-00050',
+    fullName: 'Mohamed Ibrahim',
+    email: 'ibrahim@example.com',
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    save: async function () {
+      saved = true;
+      return this;
+    },
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+  // 30 confirmed seats currently out of 50
+  SmallSummitRegistration.countDocuments = async () => 30;
+
+  const req = {
+    params: { registrationId: 'SS26-00050' },
+    body: { adminNotes: 'Verified against bank UTR.' },
+    admin: { email: 'admin@halalwealth.finance' },
+  };
+
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await approveSummitPayment(req, res);
+
+    assert.strictEqual(statusCode, 0); // default res.json is 200
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(jsonResponse.isConfirmed, true);
+    assert.strictEqual(mockRegistration.paymentStatus, 'PAID');
+    assert.strictEqual(mockRegistration.registrationStatus, 'CONFIRMED');
+    assert.strictEqual(mockRegistration.paymentApproved, true);
+    assert.strictEqual(mockRegistration.registrationApproved, true);
+    assert.ok(mockRegistration.checkInToken, 'Check-in token must be generated');
+    assert.ok(mockRegistration.checkInTokenHash, 'Check-in token hash must be generated');
+
+    // Wait a brief tick for async email dispatch
+    await new Promise(r => setTimeout(r, 20));
+    assert.ok(emailSentPayload, 'Seat confirmation email must be triggered');
+    assert.strictEqual(emailSentPayload.recipientEmail, 'ibrahim@example.com');
+    assert.strictEqual(emailSentPayload.registrationId, 'SS26-00050');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+    investorMissionEmailService.sendInvestorMissionConfirmation = origConfirmEmail;
+  }
+});
+
+test('approveSummitPayment enforces 50-seat capacity limit and warns without confirming seat', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+  const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
+
+  let emailSentCount = 0;
+  investorMissionEmailService.sendInvestorMissionConfirmation = async () => {
+    emailSentCount++;
+    return { success: true };
+  };
+
+  const mockRegistration = {
+    _id: 'mock-reg-id-999',
+    registrationId: 'SS26-00051',
+    fullName: 'Over Capacity Participant',
+    email: 'overcapacity@example.com',
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    save: async function () { return this; },
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+  // 50 confirmed seats already reached!
+  SmallSummitRegistration.countDocuments = async () => 50;
+
+  const req = {
+    params: { registrationId: 'SS26-00051' },
+    body: {},
+    admin: { email: 'admin@halalwealth.finance' },
+  };
+
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await approveSummitPayment(req, res);
+
+    assert.strictEqual(statusCode, 400);
+    assert.strictEqual(jsonResponse.success, false);
+    assert.strictEqual(jsonResponse.capacityReached, true);
+    assert.match(jsonResponse.message, /capacity \(50 confirmed seats\) has been reached/);
+    assert.strictEqual(mockRegistration.registrationStatus, 'PENDING_APPROVAL');
+    assert.strictEqual(emailSentCount, 0, 'No confirmation email should be sent when capacity is full');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+    investorMissionEmailService.sendInvestorMissionConfirmation = origConfirmEmail;
+  }
+});
+
+test('rejectSummitPayment updates paymentStatus to REJECTED, keeps unconfirmed, and does not send email', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
+
+  let emailSentCount = 0;
+  investorMissionEmailService.sendInvestorMissionConfirmation = async () => {
+    emailSentCount++;
+    return { success: true };
+  };
+
+  let saved = false;
+  const mockRegistration = {
+    _id: 'mock-reg-reject',
+    registrationId: 'SS26-00052',
+    fullName: 'Zubair Ahmed',
+    email: 'zubair@example.com',
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    save: async function () {
+      saved = true;
+      return this;
+    },
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+
+  const req = {
+    params: { registrationId: 'SS26-00052' },
+    body: { reason: 'Incorrect UTR number provided.' },
+    admin: { email: 'admin@halalwealth.finance' },
+  };
+
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(data) {
+      jsonResponse = data;
+      return this;
+    },
+  };
+
+  try {
+    await rejectSummitPayment(req, res);
+
+    assert.strictEqual(statusCode, 0); // default res.json is 200
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(saved, true);
+    assert.strictEqual(mockRegistration.paymentStatus, 'REJECTED');
+    assert.strictEqual(mockRegistration.registrationStatus, 'REJECTED');
+    assert.strictEqual(mockRegistration.paymentApproved, false);
+    assert.strictEqual(mockRegistration.registrationApproved, false);
+    assert.strictEqual(mockRegistration.rejectionReason, 'Incorrect UTR number provided.');
+    assert.strictEqual(emailSentCount, 0, 'No confirmation email should be sent upon payment rejection');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+    investorMissionEmailService.sendInvestorMissionConfirmation = origConfirmEmail;
+  }
+});
+
+test('investorMission confirmation email template includes required subject, date, venue and Google Maps link', () => {
+  const { buildInvestorMissionConfirmationContent } = require('../services/investorMissionEmailService');
+
+  const content = buildInvestorMissionConfirmationContent({
+    participantName: 'Tariq Mansoor',
+    registrationId: 'SS26-00010',
+    checkInUrl: 'https://halalwealth.finance/api/investor-mission/checkin/verify/token123',
+  });
+
+  assert.strictEqual(content.subject, 'Your Seat is Confirmed! | Investor Mission 2026');
+  assert.match(content.text, /Tariq Mansoor/);
+  assert.match(content.text, /SS26-00010/);
+  assert.match(content.text, /Registration Fee: ₹500/);
+  assert.doesNotMatch(content.text, /Registration Fee: ₹500 \(/i);
+  assert.doesNotMatch(content.text, /Verified & Paid/i);
+  assert.doesNotMatch(content.html, /Verified & Paid/i);
+  assert.doesNotMatch(content.subject, /Halal Wealth/i);
+  assert.doesNotMatch(content.text, /Halal Wealth/i);
+  assert.doesNotMatch(content.html, /Halal Wealth/i);
+  assert.match(content.text, /Sunday, 06 December 2026/);
+  assert.match(content.text, /Siruthuli Noyyal Life Centre/);
+  assert.match(content.text, /https:\/\/maps\.app\.goo\.gl\/4hwJsFTMujiSVDMEA/);
+  assert.match(content.text, /Abdul Basith – Licensed Financial Consultant/);
+  assert.match(content.text, /Team Investor Mission 2026/);
+  assert.match(content.text, /SIO Coimbatore/);
+
+  assert.match(content.html, /Tariq Mansoor/);
+  assert.match(content.html, /SS26-00010/);
+  assert.match(content.html, /https:\/\/maps\.app\.goo\.gl\/4hwJsFTMujiSVDMEA/);
+  assert.match(content.html, /Abdul Basith/);
+});
+
+
 

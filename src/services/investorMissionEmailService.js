@@ -4,17 +4,17 @@ const nodemailer = require('nodemailer');
 const QRCode = require('qrcode');
 
 const SENDER_EMAIL = 'info@halalwealth.finance';
-const DEFAULT_FROM_NAME = 'Halal Wealth';
+const DEFAULT_FROM_NAME = 'Investor Mission 2026';
 const POSTER_CID = 'investor-mission-poster';
 const QR_CID = 'participant-checkin-qr';
-const EMAIL_SUBJECT = 'Your Registration is Confirmed | Investor Mission 2026 – Halal Wealth';
+const EMAIL_SUBJECT = 'Your Seat is Confirmed! | Investor Mission 2026';
 const REMINDER_EMAIL_SUBJECT = 'Event Reminder: Investor Mission 2026 is Tomorrow | Halal Wealth';
 const ACKNOWLEDGEMENT_EMAIL_SUBJECT = 'Registration Received Successfully | Investor Mission 2026';
 
 const OFFICIAL_VENUE = {
   name: 'Siruthuli Noyyal Life Centre',
   address: 'Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023, India.',
-  googleMapsUrl: 'https://maps.google.com/?q=Siruthuli+Noyyal+Life+Centre,+Ukkadam+Sungam+Bypass+Rd,+Shanmuga+Nagar,+Ramanathapuram,+Coimbatore,+Tamil+Nadu+641023',
+  googleMapsUrl: 'https://maps.app.goo.gl/4hwJsFTMujiSVDMEA',
 };
 
 function readFirstDefined(environment, keys) {
@@ -49,9 +49,9 @@ function resolvePosterPath() {
   return candidates[0];
 }
 
-function resolveSenderConfig(environment = process.env) {
-  const rawSender = readFirstDefined(environment, ['EMAIL_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
-  const configuredName = readFirstDefined(environment, ['EMAIL_FROM_NAME', 'MAIL_FROM_NAME', 'SMTP_FROM_NAME']) || DEFAULT_FROM_NAME;
+function resolveSenderConfig(environment = process.env, defaultName = DEFAULT_FROM_NAME) {
+  const rawSender = readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_FROM', 'EMAIL_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
+  const configuredName = readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_FROM_NAME', 'INVESTOR_MISSION_FROM_NAME']) || defaultName;
   return {
     fromName: configuredName,
     fromAddress: rawSender.includes('<') ? rawSender.replace(/^.*<([^>]+)>.*$/, '$1') : rawSender,
@@ -70,32 +70,26 @@ function buildInvestorMissionConfirmationContent({
 }) {
   const safeName = escapeHtml(participantName || 'Valued Participant');
   const safeRegId = escapeHtml(registrationId || 'Pending');
-  const safeUrl = escapeHtml(checkInUrl || 'https://halalwealth.finance');
 
   const text = `Assalamu Alaikum ${participantName || 'Valued Participant'},
 
 Alhamdulillah!
 
-We are pleased to confirm that your registration for INVESTOR MISSION 2026 – THE HALAL WAY OF INVESTING has been successfully approved.
-
-Your registration and payment have been verified.
+We are pleased to confirm that your seat for INVESTOR MISSION 2026 – THE HALAL WAY OF INVESTING is officially reserved.
 
 We look forward to welcoming you to an educational gathering focused on Islamic finance, halal investing and responsible wealth creation.
 
 YOUR EVENT DETAILS:
-- Event: Investor Mission 2026
-- Theme: The Halal Way of Investing
+- Event: Investor Mission 2026 – The Halal Way of Investing
 - Date: Sunday, 06 December 2026
-- Venue Name: ${OFFICIAL_VENUE.name}
-- Full Address: ${OFFICIAL_VENUE.address}
-- Google Maps Directions: ${OFFICIAL_VENUE.googleMapsUrl}
+- Venue: Siruthuli Noyyal Life Centre, Ukkadam Sungam Bypass Rd, Shanmuga Nagar, Ramanathapuram, Coimbatore, Tamil Nadu 641023, India.
+- Google Maps link: https://maps.app.goo.gl/4hwJsFTMujiSVDMEA
 - Speaker: Abdul Basith – Licensed Financial Consultant
-- Registration Fee: ₹500 (Verified & Approved)
+- Registration Fee: ₹500
 - Registration ID: ${registrationId}
 
 YOUR PERSONAL EVENT CHECK-IN QR CODE:
-Please present the QR code attached in this email at the event entrance for registration verification and attendance check-in.
-Check-in verification link: ${checkInUrl}
+Please present your personal check-in QR code attached to this email at the event entrance for registration verification and attendance check-in.
 
 IMPORTANT INSTRUCTIONS:
 - Keep your confirmation email accessible on the day of the event.
@@ -107,10 +101,8 @@ We look forward to seeing you at Investor Mission 2026.
 
 JazakAllahu Khairan.
 
-Warm Regards,
-HALAL WEALTH
-SIO Coimbatore & Halal Wealth
-Website: https://halalwealth.finance`;
+Team Investor Mission 2026
+SIO Coimbatore`;
 
   const posterImgHtml = includePoster
     ? `
@@ -122,7 +114,7 @@ Website: https://halalwealth.finance`;
   const qrImgHtml = includeQr
     ? `
       <div style="background-color:#053726;border-radius:12px;padding:28px 24px;margin:28px 0;text-align:center;color:#ffffff;border:1px solid #0a4d36;">
-        <span style="display:inline-block;background-color:#80df35;color:#053726;font-size:11px;font-weight:800;letter-spacing:1.5px;padding:4px 12px;border-radius:20px;text-transform:uppercase;margin-bottom:12px;">Pass & Entrance Access</span>
+        <span style="display:inline-block;background-color:#80df35;color:#053726;font-size:11px;font-weight:800;letter-spacing:1.5px;padding:4px 12px;border-radius:20px;text-transform:uppercase;margin-bottom:12px;">Pass &amp; Entrance Access</span>
         <h3 style="margin:0 0 8px;font-size:19px;font-weight:700;color:#ffffff;">YOUR PERSONAL EVENT CHECK-IN QR CODE</h3>
         <p style="margin:0 0 20px;font-size:14px;color:#d1e7dd;line-height:1.5;">Please present this QR code at the event entrance for registration verification and attendance check-in.</p>
         <div style="display:inline-block;background:#ffffff;padding:12px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.25);margin-bottom:12px;">
@@ -151,7 +143,7 @@ Website: https://halalwealth.finance`;
             <!-- Header Brand Banner -->
             <tr>
               <td style="padding:32px 28px 24px;background-color:#053726;text-align:center;border-bottom:3px solid #80df35;">
-                <p style="margin:0 0 6px;color:#80df35;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">SIO Coimbatore &bull; Halal Wealth</p>
+                <p style="margin:0 0 6px;color:#80df35;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">SIO Coimbatore</p>
                 <h1 style="margin:0 0 6px;color:#ffffff;font-size:24px;line-height:1.25;font-weight:800;letter-spacing:0.5px;">INVESTOR MISSION 2026</h1>
                 <p style="margin:0;color:#d8ae54;font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">THE HALAL WAY OF INVESTING</p>
               </td>
@@ -165,12 +157,12 @@ Website: https://halalwealth.finance`;
                 <p style="margin:0 0 14px;font-size:18px;color:#053726;font-weight:800;">Alhamdulillah!</p>
                 
                 <p style="margin:0 0 16px;color:#334155;">
-                  We are pleased to confirm that your registration for <strong>INVESTOR MISSION 2026 – THE HALAL WAY OF INVESTING</strong> has been successfully approved.
+                  We are pleased to confirm that your seat for <strong>INVESTOR MISSION 2026 – THE HALAL WAY OF INVESTING</strong> is officially reserved.
                 </p>
                 
                 <div style="background-color:#f0fdf4;border-left:4px solid #16a34a;padding:14px 18px;margin:0 0 20px;border-radius:0 8px 8px 0;">
                   <p style="margin:0;color:#166534;font-size:14px;font-weight:600;">
-                    ✓ Your registration and ₹500 payment have been verified.
+                    ✓ Your seat is officially confirmed.
                   </p>
                 </div>
 
@@ -188,24 +180,17 @@ Website: https://halalwealth.finance`;
                   </h2>
                   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:14px;line-height:1.8;">
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;width:140px;font-weight:600;">Event:</td>
-                      <td style="padding:4px 0;color:#053726;font-weight:700;">Investor Mission 2026</td>
+                      <td style="padding:6px 0;color:#64748b;width:140px;font-weight:600;vertical-align:top;">Event:</td>
+                      <td style="padding:6px 0;color:#053726;font-weight:700;vertical-align:top;">Investor Mission 2026 – The Halal Way of Investing</td>
                     </tr>
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;font-weight:600;">Theme:</td>
-                      <td style="padding:4px 0;color:#1e293b;font-weight:600;">The Halal Way of Investing</td>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Date:</td>
+                      <td style="padding:6px 0;color:#053726;font-weight:700;vertical-align:top;">Sunday, 06 December 2026</td>
                     </tr>
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;font-weight:600;">Date:</td>
-                      <td style="padding:4px 0;color:#053726;font-weight:700;">Sunday, 06 December 2026</td>
-                    </tr>
-                    <tr>
-                      <td style="padding:6px 0;color:#64748b;width:140px;font-weight:600;vertical-align:top;">Venue Name:</td>
-                      <td style="padding:6px 0;color:#053726;font-weight:700;font-size:15px;vertical-align:top;">${escapeHtml(OFFICIAL_VENUE.name)}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Full Address:</td>
+                      <td style="padding:6px 0;color:#64748b;width:140px;font-weight:600;vertical-align:top;">Venue:</td>
                       <td style="padding:6px 0;color:#1e293b;font-weight:500;line-height:1.55;vertical-align:top;">
+                        <strong style="color:#053726;font-size:15px;display:block;margin-bottom:2px;">${escapeHtml(OFFICIAL_VENUE.name)}</strong>
                         ${escapeHtml(OFFICIAL_VENUE.address)}
                         <div style="margin-top:8px;">
                           <a href="${escapeHtml(OFFICIAL_VENUE.googleMapsUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;background-color:#053726;color:#ffffff;font-size:12px;font-weight:700;padding:7px 14px;border-radius:6px;text-decoration:none;letter-spacing:0.3px;">
@@ -215,16 +200,16 @@ Website: https://halalwealth.finance`;
                       </td>
                     </tr>
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;font-weight:600;">Speaker:</td>
-                      <td style="padding:4px 0;color:#1e293b;font-weight:600;">Abdul Basith – Licensed Financial Consultant</td>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Speaker:</td>
+                      <td style="padding:6px 0;color:#1e293b;font-weight:600;vertical-align:top;">Abdul Basith – Licensed Financial Consultant</td>
                     </tr>
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;font-weight:600;">Registration Fee:</td>
-                      <td style="padding:4px 0;color:#16a34a;font-weight:700;">₹500 (Verified &amp; Paid)</td>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Registration Fee:</td>
+                      <td style="padding:6px 0;color:#053726;font-weight:700;vertical-align:top;">₹500</td>
                     </tr>
                     <tr>
-                      <td style="padding:4px 0;color:#64748b;font-weight:600;">Registration ID:</td>
-                      <td style="padding:4px 0;color:#053726;font-weight:800;font-size:15px;letter-spacing:0.5px;">${safeRegId}</td>
+                      <td style="padding:6px 0;color:#64748b;font-weight:600;vertical-align:top;">Registration ID:</td>
+                      <td style="padding:6px 0;color:#053726;font-weight:800;font-size:15px;letter-spacing:0.5px;vertical-align:top;">${safeRegId}</td>
                     </tr>
                   </table>
                 </div>
@@ -251,13 +236,10 @@ Website: https://halalwealth.finance`;
                   JazakAllahu Khairan.
                 </p>
 
+                <!-- Closing Signature -->
                 <div style="border-top:1px solid #e2e8f0;padding-top:16px;margin-top:24px;">
-                  <p style="margin:0 0 4px;color:#64748b;font-size:13px;">Warm Regards,</p>
-                  <p style="margin:0;color:#053726;font-weight:800;font-size:15px;">HALAL WEALTH</p>
-                  <p style="margin:2px 0 0;color:#334155;font-size:13px;font-weight:600;">SIO Coimbatore &amp; Halal Wealth</p>
-                  <p style="margin:6px 0 0;font-size:13px;">
-                    <a href="https://halalwealth.finance" style="color:#053726;text-decoration:underline;font-weight:600;">https://halalwealth.finance</a>
-                  </p>
+                  <p style="margin:0;color:#053726;font-weight:800;font-size:15px;">Team Investor Mission 2026</p>
+                  <p style="margin:2px 0 0;color:#334155;font-size:14px;font-weight:600;">SIO Coimbatore</p>
                 </div>
               </td>
             </tr>
@@ -265,7 +247,7 @@ Website: https://halalwealth.finance`;
             <!-- Footer -->
             <tr>
               <td style="padding:20px 28px;background-color:#f8fafc;border-top:1px solid #e2e8f0;text-align:center;color:#64748b;font-size:12px;line-height:1.5;">
-                <p style="margin:0 0 4px;">&copy; 2026 Halal Wealth &bull; SIO Coimbatore. All rights reserved.</p>
+                <p style="margin:0 0 4px;font-weight:700;color:#053726;">Investor Mission 2026 &bull; SIO Coimbatore</p>
                 <p style="margin:0;font-size:11px;color:#94a3b8;">This email was sent to confirm your seat reservation for Investor Mission 2026.</p>
               </td>
             </tr>
