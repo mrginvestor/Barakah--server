@@ -1030,6 +1030,80 @@ function createInvestorMissionEmailService({
     }
   }
 
+  /**
+   * Diagnostic verification of SMTP connection without sending email
+   */
+  async function verifyEmailService({ timeoutMs = 8000 } = {}) {
+    const environment = process.env;
+    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
+    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
+    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
+    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
+    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
+
+    const isPort465 = port === 465;
+    const isPort587 = port === 587;
+    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
+    const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+      return {
+        ok: false,
+        success: false,
+        code: 'EMAIL_CONFIG_INCOMPLETE',
+        host: host || 'not configured',
+        port,
+        secure,
+        usernameConfigured: Boolean(username),
+        passwordConfigured: Boolean(password),
+        message: 'SMTP configuration incomplete: Host, port, username, or password missing.',
+      };
+    }
+
+    const testTransporter = createTransporter({
+      host,
+      port,
+      secure,
+      requireTLS,
+      family: 4,
+      connectionTimeout: timeoutMs,
+      greetingTimeout: timeoutMs,
+      socketTimeout: timeoutMs + 2000,
+      auth: { user: username, pass: password },
+    });
+
+    const startTime = Date.now();
+    try {
+      await testTransporter.verify();
+      const latencyMs = Date.now() - startTime;
+      return {
+        ok: true,
+        success: true,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        host,
+        port,
+        secure,
+        authenticatedUser: username,
+        latencyMs,
+        message: `SMTP connected successfully to ${host}:${port} (${username}) in ${latencyMs}ms.`,
+      };
+    } catch (error) {
+      const latencyMs = Date.now() - startTime;
+      return {
+        ok: false,
+        success: false,
+        provider: 'Hostinger SMTP (Nodemailer)',
+        code: error.code || 'SMTP_VERIFY_FAILED',
+        error: error.message,
+        message: `SMTP verification failed: ${error.message}`,
+        host,
+        port,
+        secure,
+        latencyMs,
+      };
+    }
+  }
+
   return {
     sendInvestorMissionConfirmation,
     sendInvestorMissionReminder,
@@ -1039,6 +1113,7 @@ function createInvestorMissionEmailService({
     buildInvestorMissionAcknowledgementContent,
     generateQrBuffer,
     resolvePosterPath,
+    verifyEmailService,
     resetTransporter,
   };
 }

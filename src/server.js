@@ -44,50 +44,83 @@ async function verifyEmailConfiguration() {
     console.warn('Background SMTP verification notice:', err?.message || err);
   }
 }
-app.use(helmet());
+app.set('trust proxy', 1);
+
+// --- CORS Configuration (registered BEFORE helmet and API routes) ---
 const parseOrigins = value => String(value || '')
   .split(',')
   .map(origin => origin.trim().replace(/\/+$/, ''))
   .filter(Boolean);
-const isProduction = process.env.NODE_ENV === 'production';
-const isLocalOrigin = origin => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
-const configuredFrontendOrigins = parseOrigins(process.env.FRONTEND_URLS);
-const productionOrigins = configuredFrontendOrigins.filter(origin => !isLocalOrigin(origin));
-const legacyClientOrigins = parseOrigins(process.env.CLIENT_URL)
-  .filter(origin => !isProduction || !isLocalOrigin(origin));
-const defaultOrigins = isProduction
-  ? (productionOrigins.length ? productionOrigins : [
-    'https://www.halalwealth.finance',
-    'https://halalwealth.finance',
-    'https://barakah-client-eta.vercel.app',
-  ])
-  : [
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:3000',
-  ];
-const allowedOrigins = new Set([
-  ...defaultOrigins,
-  ...(!isProduction ? configuredFrontendOrigins : []),
-  ...legacyClientOrigins,
-]);
+
+const configuredFrontendOrigins = [
+  ...parseOrigins(process.env.FRONTEND_URLS),
+  ...parseOrigins(process.env.CLIENT_URL),
+];
+
+// Production domains and standard local origins are ALWAYS explicitly allowed
+const KNOWN_ALLOWED_ORIGINS = [
+  'https://www.halalwealth.finance',
+  'https://halalwealth.finance',
+  'http://www.halalwealth.finance',
+  'http://halalwealth.finance',
+  'https://barakah-client-eta.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
+const allowedOriginsSet = new Set(
+  [...KNOWN_ALLOWED_ORIGINS, ...configuredFrontendOrigins].map(o => o.toLowerCase())
+);
+
+const isAllowedOrigin = (requestOrigin) => {
+  if (!requestOrigin) return true; // allow same-origin, curl, server-to-server, Postman
+  const normalized = String(requestOrigin).trim().toLowerCase().replace(/\/+$/, '');
+  
+  if (allowedOriginsSet.has(normalized)) return true;
+
+  // Pattern matching: allow halalwealth.finance and any subdomains (e.g. www.halalwealth.finance)
+  if (/^https?:\/\/([a-z0-9-]+\.)*halalwealth\.finance$/i.test(normalized)) {
+    return true;
+  }
+
+  // Allow localhost / 127.0.0.1 on any port for local development and testing
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized)) {
+    return true;
+  }
+
+  return false;
+};
+
 const corsOptions = {
   origin: (requestOrigin, callback) => {
-    if (!requestOrigin || allowedOrigins.has(requestOrigin)) {
+    if (isAllowedOrigin(requestOrigin)) {
       callback(null, true);
-      return;
+    } else {
+      console.warn(`[CORS] Blocked request from unauthorized origin: ${requestOrigin}`);
+      callback(null, false);
     }
-
-    console.warn(`Blocked CORS request from origin: ${requestOrigin}`);
-    callback(new Error('Origin not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  credentials: true,
   optionsSuccessStatus: 204,
+  maxAge: 86400, // cache preflight response for 24 hours
 };
-app.set('trust proxy', 1);
+
+// Apply CORS middleware first
 app.use(cors(corsOptions));
+
+// Explicitly handle all OPTIONS preflight requests before any route or security middleware
+app.options('*', cors(corsOptions));
+
+// Apply Helmet security headers with crossOriginResourcePolicy allowing cross-origin API calls
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -104,6 +137,22 @@ app.get('/api/status', (req, res) => res.json({ status: 'API is running' }));
 const apiRoutes = require('./routes/api');
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api', apiRoutes);
+
+// Express Error Handling Middleware with CORS preservation
+app.use((err, req, res, next) => {
+  const requestOrigin = req.headers.origin;
+  if (requestOrigin && isAllowedOrigin(requestOrigin)) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
+  const statusCode = err.status || err.statusCode || 500;
+  console.error(`[API ERROR] ${req.method} ${req.originalUrl}:`, err.message || err);
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || 'An internal server error occurred.',
+  });
+});
 
 function verifyAdminAuthConfiguration() {
   const { getMissingAuthConfiguration } = require('./controllers/adminAuthController');

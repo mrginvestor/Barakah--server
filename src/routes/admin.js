@@ -20,6 +20,7 @@ const {
   exportAttendanceCsv,
   resendConfirmationEmail,
   resendAcknowledgementEmail,
+  getInvestorMissionEmailDiagnostic,
 } = require('../controllers/summitController');
 const { requireAdmin, requireInvestorMissionAdmin } = require('../middleware/requireAdmin');
 
@@ -63,13 +64,16 @@ router.post('/investor-mission/registrations/:registrationId/reject-payment', re
 router.post('/investor-mission/registrations/:registrationId/reject', requireInvestorMissionAdmin, rejectSummitPayment);
 router.post('/investor-mission/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
 router.post('/investor-mission/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
+router.get('/investor-mission/email-diagnostic', requireInvestorMissionAdmin, getInvestorMissionEmailDiagnostic);
 router.post('/investor-mission/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/investor-mission/registrations/:registrationId/send-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
 router.post('/investor-mission/registrations/:registrationId/resend-acknowledgement', requireInvestorMissionAdmin, resendAcknowledgementEmail);
 router.post('/investor-mission/checkin', requireInvestorMissionAdmin, checkInParticipant);
 router.get('/investor-mission/attendance', requireInvestorMissionAdmin, getAttendanceStats);
 router.get('/investor-mission/attendance/export', requireInvestorMissionAdmin, exportAttendanceCsv);
 
 // DEC Summit Event Registrations & Multi-Step Verification Operations (Aliases)
+router.get('/dec-summit/email-diagnostic', requireInvestorMissionAdmin, getInvestorMissionEmailDiagnostic);
 router.get('/dec-summit/stats', requireInvestorMissionAdmin, getAdminSummitStats);
 router.get('/dec-summit/registrations', requireInvestorMissionAdmin, getAdminSummitRegistrations);
 router.get('/dec-summit/receipt/:registrationId', requireInvestorMissionAdmin, getPaymentReceiptFile);
@@ -82,6 +86,7 @@ router.post('/dec-summit/registrations/:registrationId/reject', requireInvestorM
 router.post('/dec-summit/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
 router.post('/dec-summit/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
 router.post('/dec-summit/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/dec-summit/registrations/:registrationId/send-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
 router.post('/dec-summit/registrations/:registrationId/resend-acknowledgement', requireInvestorMissionAdmin, resendAcknowledgementEmail);
 router.post('/dec-summit/checkin', requireInvestorMissionAdmin, checkInParticipant);
 router.get('/dec-summit/attendance', requireInvestorMissionAdmin, getAttendanceStats);
@@ -100,6 +105,7 @@ router.post('/small-summit/registrations/:registrationId/reject', requireInvesto
 router.post('/small-summit/registrations/:registrationId/record-offline-payment', requireInvestorMissionAdmin, recordOfflinePayment);
 router.post('/small-summit/registrations/:registrationId/notes', requireInvestorMissionAdmin, addAdminVerificationNotes);
 router.post('/small-summit/registrations/:registrationId/resend-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
+router.post('/small-summit/registrations/:registrationId/send-confirmation', requireInvestorMissionAdmin, resendConfirmationEmail);
 router.post('/small-summit/registrations/:registrationId/resend-acknowledgement', requireInvestorMissionAdmin, resendAcknowledgementEmail);
 router.post('/small-summit/checkin', requireInvestorMissionAdmin, checkInParticipant);
 router.get('/small-summit/attendance', requireInvestorMissionAdmin, getAttendanceStats);

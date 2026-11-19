@@ -1616,12 +1616,14 @@ async function exportAttendanceCsv(req, res) {
 
 /**
  * POST /api/admin/investor-mission/registrations/:registrationId/resend-confirmation
+ * and /send-confirmation
  * Admin-protected: Retry or resend confirmation email with QR code.
  */
 async function resendConfirmationEmail(req, res) {
+  let registration = null;
   try {
     const { registrationId } = req.params;
-    const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
+    registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
 
     if (!registration) {
       return res.status(404).json({ success: false, message: 'Registration not found.' });
@@ -1664,14 +1666,36 @@ async function resendConfirmationEmail(req, res) {
 
     return res.json({
       success: true,
-      message: `Confirmation email with check-in QR code resent successfully to ${registration.email}.`,
+      message: `Confirmation email with check-in QR code sent successfully to ${registration.email}.`,
     });
   } catch (error) {
-    console.error('Error resending confirmation email:', error);
-    registration.confirmationEmailStatus = 'FAILED';
-    registration.confirmationEmailLastError = String(error.message).slice(0, 500);
-    await registration.save().catch(() => {});
-    return res.status(500).json({ success: false, message: `Failed to resend confirmation email: ${error.message}` });
+    console.error('Error sending confirmation email:', error);
+    if (registration) {
+      registration.confirmationEmailStatus = 'FAILED';
+      registration.confirmationEmailLastError = String(error.message).slice(0, 500);
+      await registration.save().catch(() => {});
+    }
+    return res.status(500).json({
+      success: false,
+      message: `Failed to send confirmation email: ${error.message}`,
+    });
+  }
+}
+
+/**
+ * GET /api/admin/investor-mission/email-diagnostic
+ * Admin-protected: Verify SMTP / email service health and connection latency.
+ */
+async function getInvestorMissionEmailDiagnostic(req, res) {
+  try {
+    const diagnostic = await investorMissionEmailService.verifyEmailService();
+    return res.status(diagnostic.ok ? 200 : 503).json(diagnostic);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      error: error.message,
+    });
   }
 }
 
@@ -1735,5 +1759,6 @@ module.exports = {
   exportAttendanceCsv,
   resendConfirmationEmail,
   resendAcknowledgementEmail,
+  getInvestorMissionEmailDiagnostic,
   evaluateCombinedApproval,
 };
