@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
+const SummitRegistration = require('../models/SummitRegistration');
 
 const JWT_SECRET = 'route-test-secret-that-is-at-least-thirty-two-characters';
 const ADMIN_JWT_ISSUER = 'halal-wealth-admin';
