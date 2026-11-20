@@ -9,10 +9,11 @@ const SummitRegistration = require('../models/SummitRegistration');
 const JWT_SECRET = 'route-test-secret-that-is-at-least-thirty-two-characters';
 const ADMIN_JWT_ISSUER = 'halal-wealth-admin';
 
+
 function createTestApp() {
   const app = express();
   app.set('trust proxy', 1);
-  
+
 
   const KNOWN_ALLOWED_ORIGINS = [
     'https://www.halalwealth.finance',
