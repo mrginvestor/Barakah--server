@@ -14,6 +14,7 @@ function createTestApp() {
   const app = express();
   app.set('trust proxy', 1);
 
+  
 
   const KNOWN_ALLOWED_ORIGINS = [
     'https://www.halalwealth.finance',
