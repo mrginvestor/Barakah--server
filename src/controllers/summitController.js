@@ -5,6 +5,7 @@ const SUMMIT_CONFIG = require('../config/summitConfig');
 const { getNextRegistrationId } = require('./registrationController');
 const crypto = require('crypto');
 const { validateImageMagicBytes, UPLOAD_DIR } = require('../middleware/receiptUpload');
+const { processAndStoreReceipt } = require('../services/receiptStorageService');
 const defaultEmailService = require('../services/webinarEmailService');
 const investorMissionEmailService = require('../services/investorMissionEmailService');
 
@@ -654,10 +655,18 @@ async function submitSummitPaymentProof(req, res) {
       }
     }
 
+    // Process and persistently store screenshot (in MongoDB Atlas and optionally Cloudinary)
+    const stored = await processAndStoreReceipt(req.file, registration.registrationId);
+
     // Save proof details and transition status to PENDING_VERIFICATION
-    registration.paymentScreenshot = req.file.filename;
-    registration.paymentScreenshotMimeType = req.file.mimetype;
-    registration.paymentScreenshotSize = req.file.size;
+    registration.paymentScreenshot = stored.filename;
+    registration.paymentScreenshotMimeType = stored.mimeType;
+    registration.paymentScreenshotSize = stored.size;
+    registration.paymentScreenshotData = stored.buffer; // Persistent binary stored directly in MongoDB Atlas
+    registration.paymentScreenshotStorage = stored.storageType;
+    if (stored.cloudUrl) {
+      registration.paymentScreenshotUrl = stored.cloudUrl;
+    }
     registration.upiTransactionId = utr;
     registration.paymentDate = payDate;
     registration.paymentNotes = String(req.body.paymentNotes || '').trim();
@@ -763,7 +772,10 @@ async function getAdminSummitRegistrations(req, res) {
       }
     }
 
-    const registrations = await SummitRegistration.find(filter).sort({ createdAt: -1 }).lean();
+    const registrations = await SummitRegistration.find(filter)
+      .select('-paymentScreenshotData')
+      .sort({ createdAt: -1 })
+      .lean();
     const capacity = await calculateActiveSeats(SummitRegistration);
 
     return res.json({
@@ -858,21 +870,52 @@ async function getPaymentReceiptFile(req, res) {
     const { registrationId } = req.params;
     const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
 
-    if (!registration || !registration.paymentScreenshot) {
-      return res.status(404).json({ message: 'Payment screenshot not found for this registration.' });
+    if (!registration || (!registration.paymentScreenshot && !registration.paymentScreenshotData && !registration.paymentScreenshotUrl)) {
+      return res.status(404).json({
+        success: false,
+        code: 'RECEIPT_NOT_FOUND',
+        message: 'Payment screenshot not found for this registration.',
+      });
     }
 
-    const filePath = path.join(UPLOAD_DIR, registration.paymentScreenshot);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: 'Receipt file not found on disk.' });
+    // 1. Cloud storage redirect if cloud URL exists
+    if (registration.paymentScreenshotUrl && /^https?:\/\//i.test(registration.paymentScreenshotUrl)) {
+      return res.redirect(registration.paymentScreenshotUrl);
     }
 
-    res.setHeader('Content-Type', registration.paymentScreenshotMimeType || 'image/png');
-    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-    return res.sendFile(filePath);
+    // 2. Persistent binary buffer stored directly in MongoDB Atlas
+    if (registration.paymentScreenshotData && Buffer.isBuffer(registration.paymentScreenshotData) && registration.paymentScreenshotData.length > 0) {
+      const mime = registration.paymentScreenshotMimeType || 'image/jpeg';
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Length', registration.paymentScreenshotData.length);
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot || 'receipt.jpg'}"`);
+      return res.end(registration.paymentScreenshotData);
+    }
+
+    // 3. Fallback: check local disk cache
+    if (registration.paymentScreenshot) {
+      const filePath = path.join(UPLOAD_DIR, registration.paymentScreenshot);
+      if (fs.existsSync(filePath)) {
+        res.setHeader('Content-Type', registration.paymentScreenshotMimeType || 'image/png');
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot}"`);
+        return res.sendFile(filePath);
+      }
+    }
+
+    // 4. File is genuinely unavailable (legacy upload on ephemeral disk prior to persistent storage)
+    return res.status(404).json({
+      success: false,
+      code: 'RECEIPT_FILE_UNAVAILABLE',
+      message: 'Payment screenshot file is not available on the server (it was submitted prior to persistent storage enablement). Participant details and UTR number remain preserved.',
+      registrationId: registration.registrationId,
+      upiTransactionId: registration.upiTransactionId,
+      paymentStatus: registration.paymentStatus,
+    });
   } catch (error) {
     console.error('Error serving receipt file:', error);
-    return res.status(500).json({ message: 'Failed to retrieve payment receipt.' });
+    return res.status(500).json({ success: false, message: 'Failed to retrieve payment receipt.' });
   }
 }
 
@@ -1005,17 +1048,34 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
         checkInUrl,
       })
         .then(() => {
-          registration.confirmationEmailSent = true;
-          registration.confirmationEmailStatus = 'SENT';
-          registration.confirmationEmailSentAt = new Date();
-          registration.confirmationEmailLastError = null;
-          return registration.save().catch(() => {});
+          return SummitRegistration.updateOne(
+            { _id: registration._id },
+            {
+              $set: {
+                confirmationEmailSent: true,
+                confirmationEmailStatus: 'SENT',
+                confirmationEmailSentAt: new Date(),
+                confirmationEmailLastAttemptAt: new Date(),
+                confirmationEmailLastError: null,
+              },
+              $inc: { confirmationEmailAttempts: 1 },
+            }
+          ).catch(() => {});
         })
         .catch(err => {
           console.warn('Failed to send Investor Mission confirmation email:', err.message);
-          registration.confirmationEmailStatus = 'FAILED';
-          registration.confirmationEmailLastError = String(err.message).slice(0, 500);
-          return registration.save().catch(() => {});
+          return SummitRegistration.updateOne(
+            { _id: registration._id },
+            {
+              $set: {
+                confirmationEmailSent: false,
+                confirmationEmailStatus: 'FAILED',
+                confirmationEmailLastError: String(err.message).slice(0, 500),
+                confirmationEmailLastAttemptAt: new Date(),
+              },
+              $inc: { confirmationEmailAttempts: 1 },
+            }
+          ).catch(() => {});
         });
     }
 
@@ -1533,7 +1593,9 @@ async function getAttendanceStats(req, res) {
         { status: 'Confirmed' },
         { status: 'Checked-In' },
       ],
-    }).sort({ createdAt: -1 });
+    })
+      .select('-paymentScreenshotData')
+      .sort({ createdAt: -1 });
 
     const totalConfirmed = attendees.length;
     const totalCheckedIn = attendees.filter(a => a.attendanceStatus === 'CHECKED_IN' || a.status === 'Checked-In').length;
@@ -1567,7 +1629,10 @@ async function exportAttendanceCsv(req, res) {
         { status: 'Confirmed' },
         { status: 'Checked-In' },
       ],
-    }).sort({ registrationId: 1 }).lean();
+    })
+      .select('-paymentScreenshotData')
+      .sort({ registrationId: 1 })
+      .lean();
 
     const headers = [
       'Registration ID',
@@ -1661,23 +1726,36 @@ async function resendConfirmationEmail(req, res) {
     registration.confirmationEmailSent = true;
     registration.confirmationEmailStatus = 'SENT';
     registration.confirmationEmailSentAt = new Date();
+    registration.confirmationEmailLastAttemptAt = new Date();
     registration.confirmationEmailLastError = null;
+    registration.confirmationEmailAttempts = (registration.confirmationEmailAttempts || 0) + 1;
     await registration.save();
 
     return res.json({
       success: true,
       message: `Confirmation email with check-in QR code sent successfully to ${registration.email}.`,
+      emailStatus: 'SENT',
+      attempts: registration.confirmationEmailAttempts,
+      data: {
+        confirmationEmailStatus: 'SENT',
+        confirmationEmailSentAt: registration.confirmationEmailSentAt,
+        confirmationEmailAttempts: registration.confirmationEmailAttempts,
+      },
     });
   } catch (error) {
     console.error('Error sending confirmation email:', error);
     if (registration) {
       registration.confirmationEmailStatus = 'FAILED';
       registration.confirmationEmailLastError = String(error.message).slice(0, 500);
+      registration.confirmationEmailLastAttemptAt = new Date();
+      registration.confirmationEmailAttempts = (registration.confirmationEmailAttempts || 0) + 1;
       await registration.save().catch(() => {});
     }
     return res.status(500).json({
       success: false,
       message: `Failed to send confirmation email: ${error.message}`,
+      emailStatus: 'FAILED',
+      error: error.message,
     });
   }
 }

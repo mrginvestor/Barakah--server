@@ -89,6 +89,9 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   paymentScreenshot: { type: String, default: null },
   paymentScreenshotMimeType: { type: String, default: null },
   paymentScreenshotSize: { type: Number, default: null },
+  paymentScreenshotData: { type: Buffer, default: null },
+  paymentScreenshotUrl: { type: String, default: null, trim: true },
+  paymentScreenshotStorage: { type: String, default: 'mongodb' },
   upiTransactionId: { type: String, default: null, trim: true },
   paymentDate: { type: Date, default: null },
   paymentNotes: { type: String, default: '', trim: true },
@@ -116,6 +119,8 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   confirmationEmailSent: { type: Boolean, default: false },
   confirmationEmailSentAt: { type: Date, default: null },
   confirmationEmailLastError: { type: String, default: null },
+  confirmationEmailAttempts: { type: Number, default: 0 },
+  confirmationEmailLastAttemptAt: { type: Date, default: null },
 
   // Registration Received Acknowledgement Email
   acknowledgementEmailStatus: {

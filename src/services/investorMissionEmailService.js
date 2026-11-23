@@ -654,6 +654,84 @@ function createInvestorMissionEmailService({
     cachedKey = null;
   }
 
+  function resolveTransportConfig(environment = process.env, portOverride = null) {
+    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
+    const configuredPort = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
+    const port = portOverride ? Number(portOverride) : configuredPort;
+    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
+    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
+    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
+
+    const isPort465 = port === 465;
+    const isPort587 = port === 587;
+    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
+    const requireTLS = isPort587 ? true : (!secure && port !== 465);
+
+    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
+      error.code = 'EMAIL_CONFIG_INCOMPLETE';
+      throw error;
+    }
+
+    const connectionTimeout = Number(readFirstDefined(environment, ['SMTP_CONNECTION_TIMEOUT_MS']) || 15000);
+    const greetingTimeout = Number(readFirstDefined(environment, ['SMTP_GREETING_TIMEOUT_MS']) || 15000);
+    const socketTimeout = Number(readFirstDefined(environment, ['SMTP_SOCKET_TIMEOUT_MS']) || 25000);
+
+    return {
+      host,
+      port,
+      secure,
+      requireTLS,
+      family: 4,
+      pool: false,
+      connectionTimeout,
+      greetingTimeout,
+      socketTimeout,
+      auth: { user: username, pass: password },
+    };
+  }
+
+  async function sendMailWithPortFallback(mailOptions, tag = 'CONFIRMATION') {
+    const environment = process.env;
+    const primaryConfig = resolveTransportConfig(environment);
+    const fallbackPort = primaryConfig.port === 465 ? 587 : (primaryConfig.port === 587 ? 465 : null);
+
+    const transporter = getTransporter(primaryConfig);
+    try {
+      const info = await transporter.sendMail(mailOptions);
+      return { info, port: primaryConfig.port };
+    } catch (primaryErr) {
+      resetTransporter();
+      const isTimeoutOrConnError =
+        /timeout/i.test(primaryErr.message) ||
+        primaryErr.code === 'ETIMEDOUT' ||
+        primaryErr.code === 'ESOCKETTIMEDOUT' ||
+        primaryErr.code === 'ECONNRESET' ||
+        primaryErr.code === 'ECONNREFUSED';
+
+      if (fallbackPort && isTimeoutOrConnError) {
+        if (typeof logger.warn === 'function') {
+          logger.warn(`[${tag}] Primary SMTP port ${primaryConfig.port} failed (${primaryErr.message}). Retrying on fallback port ${fallbackPort}...`);
+        }
+        const fallbackConfig = resolveTransportConfig(environment, fallbackPort);
+        const fallbackTransporter = createTransporter(fallbackConfig);
+        try {
+          const info = await fallbackTransporter.sendMail(mailOptions);
+          if (typeof logger.info === 'function') {
+            logger.info(`[${tag}] Email sent successfully via fallback port ${fallbackPort}.`);
+          }
+          return { info, port: fallbackPort };
+        } catch (fallbackErr) {
+          if (typeof logger.error === 'function') {
+            logger.error(`[${tag}] Fallback SMTP port ${fallbackPort} also failed: ${fallbackErr.message}`);
+          }
+          throw fallbackErr;
+        }
+      }
+      throw primaryErr;
+    }
+  }
+
   /**
    * Generates a PNG QR code buffer for the given URL/content
    */
@@ -717,40 +795,7 @@ function createInvestorMissionEmailService({
       includeQr: true,
     });
 
-    const environment = process.env;
-    const { fromName, fromAddress } = resolveSenderConfig(environment);
-
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    const isPort465 = port === 465;
-    const isPort587 = port === 587;
-    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
-    const requireTLS = isPort587 ? true : (!secure && port !== 465);
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
-      error.code = 'EMAIL_CONFIG_INCOMPLETE';
-      throw error;
-    }
-
-    const transportConfig = {
-      host,
-      port,
-      secure,
-      requireTLS,
-      family: 4,
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-      auth: { user: username, pass: password },
-    };
+    const { fromName, fromAddress } = resolveSenderConfig(process.env);
 
     const attachments = [
       {
@@ -772,7 +817,6 @@ function createInvestorMissionEmailService({
       });
     }
 
-    const transporter = getTransporter(transportConfig);
     const mailOptions = {
       from: `"${fromName}" <${fromAddress}>`,
       to: cleanRecipient,
@@ -783,19 +827,24 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info('INVESTOR_MISSION_CONFIRMATION_EMAIL_SENT', {
-        recipient: cleanRecipient,
-        registrationId,
-        messageId: info.messageId,
-      });
-      return { success: true, messageId: info.messageId };
+      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_CONFIRMATION');
+      if (typeof logger.info === 'function') {
+        logger.info('INVESTOR_MISSION_CONFIRMATION_EMAIL_SENT', {
+          recipient: cleanRecipient,
+          registrationId,
+          messageId: info?.messageId,
+          port,
+        });
+      }
+      return { success: true, messageId: info?.messageId, port };
     } catch (sendErr) {
-      logger.error('INVESTOR_MISSION_CONFIRMATION_EMAIL_FAILED', {
-        recipient: cleanRecipient,
-        registrationId,
-        error: sendErr.message,
-      });
+      if (typeof logger.error === 'function') {
+        logger.error('INVESTOR_MISSION_CONFIRMATION_EMAIL_FAILED', {
+          recipient: cleanRecipient,
+          registrationId,
+          error: sendErr.message,
+        });
+      }
       throw sendErr;
     }
   }
@@ -843,40 +892,7 @@ function createInvestorMissionEmailService({
       includeQr: true,
     });
 
-    const environment = process.env;
-    const { fromName, fromAddress } = resolveSenderConfig(environment);
-
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    const isPort465 = port === 465;
-    const isPort587 = port === 587;
-    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
-    const requireTLS = isPort587 ? true : (!secure && port !== 465);
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
-      error.code = 'EMAIL_CONFIG_INCOMPLETE';
-      throw error;
-    }
-
-    const transportConfig = {
-      host,
-      port,
-      secure,
-      requireTLS,
-      family: 4,
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-      auth: { user: username, pass: password },
-    };
+    const { fromName, fromAddress } = resolveSenderConfig(process.env);
 
     const attachments = [
       {
@@ -898,7 +914,6 @@ function createInvestorMissionEmailService({
       });
     }
 
-    const transporter = getTransporter(transportConfig);
     const mailOptions = {
       from: `"${fromName}" <${fromAddress}>`,
       to: cleanRecipient,
@@ -909,19 +924,24 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info('INVESTOR_MISSION_REMINDER_EMAIL_SENT', {
-        recipient: cleanRecipient,
-        registrationId,
-        messageId: info.messageId,
-      });
-      return { success: true, messageId: info.messageId };
+      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_REMINDER');
+      if (typeof logger.info === 'function') {
+        logger.info('INVESTOR_MISSION_REMINDER_EMAIL_SENT', {
+          recipient: cleanRecipient,
+          registrationId,
+          messageId: info?.messageId,
+          port,
+        });
+      }
+      return { success: true, messageId: info?.messageId, port };
     } catch (sendErr) {
-      logger.error('INVESTOR_MISSION_REMINDER_EMAIL_FAILED', {
-        recipient: cleanRecipient,
-        registrationId,
-        error: sendErr.message,
-      });
+      if (typeof logger.error === 'function') {
+        logger.error('INVESTOR_MISSION_REMINDER_EMAIL_FAILED', {
+          recipient: cleanRecipient,
+          registrationId,
+          error: sendErr.message,
+        });
+      }
       throw sendErr;
     }
   }
@@ -956,40 +976,7 @@ function createInvestorMissionEmailService({
       includePoster: hasPoster,
     });
 
-    const environment = process.env;
-    const { fromName, fromAddress } = resolveSenderConfig(environment);
-
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    const isPort465 = port === 465;
-    const isPort587 = port === 587;
-    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
-    const requireTLS = isPort587 ? true : (!secure && port !== 465);
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
-      error.code = 'EMAIL_CONFIG_INCOMPLETE';
-      throw error;
-    }
-
-    const transportConfig = {
-      host,
-      port,
-      secure,
-      requireTLS,
-      family: 4,
-      pool: true,
-      maxConnections: 3,
-      maxMessages: 100,
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-      auth: { user: username, pass: password },
-    };
+    const { fromName, fromAddress } = resolveSenderConfig(process.env);
 
     const attachments = [];
     if (hasPoster) {
@@ -1002,7 +989,6 @@ function createInvestorMissionEmailService({
       });
     }
 
-    const transporter = getTransporter(transportConfig);
     const mailOptions = {
       from: `"${fromName}" <${fromAddress}>`,
       to: cleanRecipient,
@@ -1013,19 +999,24 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const info = await transporter.sendMail(mailOptions);
-      logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT', {
-        recipient: cleanRecipient,
-        registrationId,
-        messageId: info.messageId,
-      });
-      return { success: true, messageId: info.messageId };
+      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_ACKNOWLEDGEMENT');
+      if (typeof logger.info === 'function') {
+        logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT', {
+          recipient: cleanRecipient,
+          registrationId,
+          messageId: info?.messageId,
+          port,
+        });
+      }
+      return { success: true, messageId: info?.messageId, port };
     } catch (sendErr) {
-      logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED', {
-        recipient: cleanRecipient,
-        registrationId,
-        error: sendErr.message,
-      });
+      if (typeof logger.error === 'function') {
+        logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED', {
+          recipient: cleanRecipient,
+          registrationId,
+          error: sendErr.message,
+        });
+      }
       throw sendErr;
     }
   }
@@ -1033,43 +1024,27 @@ function createInvestorMissionEmailService({
   /**
    * Diagnostic verification of SMTP connection without sending email
    */
-  async function verifyEmailService({ timeoutMs = 8000 } = {}) {
+  async function verifyEmailService({ timeoutMs = 12000 } = {}) {
     const environment = process.env;
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const port = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    const isPort465 = port === 465;
-    const isPort587 = port === 587;
-    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
-    const requireTLS = isPort587 ? true : (!secure && port !== 465);
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
+    let primaryConfig;
+    try {
+      primaryConfig = resolveTransportConfig(environment);
+    } catch (cfgErr) {
       return {
         ok: false,
         success: false,
-        code: 'EMAIL_CONFIG_INCOMPLETE',
-        host: host || 'not configured',
-        port,
-        secure,
-        usernameConfigured: Boolean(username),
-        passwordConfigured: Boolean(password),
-        message: 'SMTP configuration incomplete: Host, port, username, or password missing.',
+        code: cfgErr.code || 'EMAIL_CONFIG_INCOMPLETE',
+        message: cfgErr.message,
+        host: environment.SMTP_HOST || environment.EMAIL_HOST || 'smtp.hostinger.com',
+        port: Number(environment.SMTP_PORT || environment.EMAIL_PORT) || 465,
       };
     }
 
     const testTransporter = createTransporter({
-      host,
-      port,
-      secure,
-      requireTLS,
-      family: 4,
+      ...primaryConfig,
       connectionTimeout: timeoutMs,
       greetingTimeout: timeoutMs,
-      socketTimeout: timeoutMs + 2000,
-      auth: { user: username, pass: password },
+      socketTimeout: timeoutMs + 3000,
     });
 
     const startTime = Date.now();
@@ -1080,25 +1055,52 @@ function createInvestorMissionEmailService({
         ok: true,
         success: true,
         provider: 'Hostinger SMTP (Nodemailer)',
-        host,
-        port,
-        secure,
-        authenticatedUser: username,
+        host: primaryConfig.host,
+        port: primaryConfig.port,
+        secure: primaryConfig.secure,
+        authenticatedUser: primaryConfig.auth?.user,
         latencyMs,
-        message: `SMTP connected successfully to ${host}:${port} (${username}) in ${latencyMs}ms.`,
+        message: `SMTP connected successfully to ${primaryConfig.host}:${primaryConfig.port} in ${latencyMs}ms.`,
       };
-    } catch (error) {
+    } catch (primaryErr) {
+      const fallbackPort = primaryConfig.port === 465 ? 587 : (primaryConfig.port === 587 ? 465 : null);
+      if (fallbackPort) {
+        try {
+          const fallbackConfig = resolveTransportConfig(environment, fallbackPort);
+          const fallbackTransporter = createTransporter({
+            ...fallbackConfig,
+            connectionTimeout: timeoutMs,
+            greetingTimeout: timeoutMs,
+            socketTimeout: timeoutMs + 3000,
+          });
+          const fbStartTime = Date.now();
+          await fallbackTransporter.verify();
+          const fbLatency = Date.now() - fbStartTime;
+          return {
+            ok: true,
+            success: true,
+            provider: 'Hostinger SMTP (Nodemailer)',
+            host: fallbackConfig.host,
+            port: fallbackConfig.port,
+            secure: fallbackConfig.secure,
+            authenticatedUser: fallbackConfig.auth?.user,
+            latencyMs: fbLatency,
+            message: `SMTP connected on fallback port ${fallbackPort} in ${fbLatency}ms (primary port ${primaryConfig.port} failed: ${primaryErr.message}).`,
+          };
+        } catch (_) {}
+      }
+
       const latencyMs = Date.now() - startTime;
       return {
         ok: false,
         success: false,
         provider: 'Hostinger SMTP (Nodemailer)',
-        code: error.code || 'SMTP_VERIFY_FAILED',
-        error: error.message,
-        message: `SMTP verification failed: ${error.message}`,
-        host,
-        port,
-        secure,
+        code: primaryErr.code || 'SMTP_VERIFY_FAILED',
+        error: primaryErr.message,
+        message: `SMTP verification failed on port ${primaryConfig.port}: ${primaryErr.message}`,
+        host: primaryConfig.host,
+        port: primaryConfig.port,
+        secure: primaryConfig.secure,
         latencyMs,
       };
     }
