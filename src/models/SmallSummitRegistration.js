@@ -113,7 +113,7 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   // Email Notifications & Status
   confirmationEmailStatus: {
     type: String,
-    enum: ['NOT_SENT', 'SENT', 'FAILED'],
+    enum: ['NOT_SENT', 'PENDING', 'SENT', 'FAILED'],
     default: 'NOT_SENT',
   },
   confirmationEmailSent: { type: Boolean, default: false },
@@ -121,6 +121,8 @@ const smallSummitRegistrationSchema = new mongoose.Schema({
   confirmationEmailLastError: { type: String, default: null },
   confirmationEmailAttempts: { type: Number, default: 0 },
   confirmationEmailLastAttemptAt: { type: Date, default: null },
+  confirmationEmailNextRetryAt: { type: Date, default: null },
+  confirmationEmailLockUntil: { type: Date, default: null },
 
   // Registration Received Acknowledgement Email
   acknowledgementEmailStatus: {
@@ -159,6 +161,7 @@ smallSummitRegistrationSchema.index(
   }
 );
 smallSummitRegistrationSchema.index({ attendanceStatus: 1 });
+smallSummitRegistrationSchema.index({ confirmationEmailStatus: 1, confirmationEmailNextRetryAt: 1 });
 smallSummitRegistrationSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model(

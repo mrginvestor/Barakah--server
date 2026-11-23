@@ -190,6 +190,8 @@ if (!process.env.MONGODB_URI) {
     defaultBulkEmailService.recoverStalledJobs().catch(err => {
       console.warn('Background bulk email recovery notice:', err?.message || err);
     });
+    const { startInvestorMissionRetryWorker } = require('./services/investorMissionRetryWorker');
+    startInvestorMissionRetryWorker({ logger: console });
     const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on port ${PORT}`);
       // Run SMTP verification asynchronously in background so HTTP server is immediately responsive

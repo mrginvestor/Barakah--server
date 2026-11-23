@@ -156,6 +156,9 @@ test('getAttendanceStats aggregates confirmed, checked-in, and remaining attende
 
   const originalFind = SummitRegistration.find;
   SummitRegistration.find = () => ({
+    select: () => ({
+      sort: async () => mockAttendees,
+    }),
     sort: async () => mockAttendees,
   });
 
@@ -193,6 +196,11 @@ test('exportAttendanceCsv formats valid CSV with proper headers', async () => {
 
   const originalFind = SummitRegistration.find;
   SummitRegistration.find = () => ({
+    select: () => ({
+      sort: () => ({
+        lean: async () => mockAttendees,
+      }),
+    }),
     sort: () => ({
       lean: async () => mockAttendees,
     }),

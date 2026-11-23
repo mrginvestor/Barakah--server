@@ -732,6 +732,186 @@ function createInvestorMissionEmailService({
     }
   }
 
+  function getActiveEmailProvider(environment = process.env) {
+    const explicit = (readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_PROVIDER', 'EMAIL_PROVIDER', 'MAIL_PROVIDER']) || '').toLowerCase();
+    if (explicit === 'resend') return 'resend';
+    if (explicit === 'brevo') return 'brevo';
+    if (explicit === 'smtp') return 'smtp';
+
+    if (readFirstDefined(environment, ['RESEND_API_KEY'])) return 'resend';
+    if (readFirstDefined(environment, ['BREVO_API_KEY'])) return 'brevo';
+    return 'smtp';
+  }
+
+  async function sendViaResend({
+    fromName,
+    fromAddress,
+    to,
+    subject,
+    html,
+    text,
+    attachments = [],
+    apiKey = readFirstDefined(process.env, ['RESEND_API_KEY']),
+  }) {
+    if (!apiKey) {
+      throw new Error('RESEND_API_KEY is missing from environment.');
+    }
+
+    const resendAttachments = attachments.map(att => {
+      let contentBase64;
+      if (Buffer.isBuffer(att.content)) {
+        contentBase64 = att.content.toString('base64');
+      } else if (att.path && fs.existsSync(att.path)) {
+        contentBase64 = fs.readFileSync(att.path).toString('base64');
+      }
+      return {
+        filename: att.filename,
+        content: contentBase64,
+      };
+    }).filter(att => Boolean(att.content));
+
+    const payload = {
+      from: `${fromName} <${fromAddress}>`,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text,
+      attachments: resendAttachments.length ? resendAttachments : undefined,
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Resend API error (${res.status}): ${data.message || res.statusText || 'Unknown error'}`);
+      }
+
+      return {
+        info: { messageId: data.id, id: data.id },
+        port: 443,
+        provider: 'Resend HTTP API (Port 443)',
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function sendViaBrevo({
+    fromName,
+    fromAddress,
+    to,
+    toName,
+    subject,
+    html,
+    text,
+    attachments = [],
+    apiKey = readFirstDefined(process.env, ['BREVO_API_KEY']),
+  }) {
+    if (!apiKey) {
+      throw new Error('BREVO_API_KEY is missing from environment.');
+    }
+
+    const brevoAttachments = attachments.map(att => {
+      let contentBase64;
+      if (Buffer.isBuffer(att.content)) {
+        contentBase64 = att.content.toString('base64');
+      } else if (att.path && fs.existsSync(att.path)) {
+        contentBase64 = fs.readFileSync(att.path).toString('base64');
+      }
+      return {
+        name: att.filename,
+        content: contentBase64,
+      };
+    }).filter(att => Boolean(att.content));
+
+    const payload = {
+      sender: { name: fromName, email: fromAddress },
+      to: [{ email: to, name: toName || to }],
+      subject,
+      htmlContent: html,
+      textContent: text,
+      attachment: brevoAttachments.length ? brevoAttachments : undefined,
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Brevo API error (${res.status}): ${data.message || res.statusText || 'Unknown error'}`);
+      }
+
+      return {
+        info: { messageId: data.messageId },
+        port: 443,
+        provider: 'Brevo HTTP API (Port 443)',
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function sendMailDispatch(mailOptions, { toName = '', tag = 'CONFIRMATION' } = {}) {
+    const provider = getActiveEmailProvider(process.env);
+
+    if (provider === 'resend') {
+      const fromStr = mailOptions.from || '';
+      const fromName = fromStr.includes('<') ? fromStr.replace(/^"?(.*?)"?\s*<.*>$/, '$1') : 'Investor Mission 2026';
+      const fromAddress = fromStr.includes('<') ? fromStr.replace(/^.*<([^>]+)>.*$/, '$1') : fromStr;
+      return sendViaResend({
+        fromName,
+        fromAddress,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text,
+        attachments: mailOptions.attachments || [],
+      });
+    }
+
+    if (provider === 'brevo') {
+      const fromStr = mailOptions.from || '';
+      const fromName = fromStr.includes('<') ? fromStr.replace(/^"?(.*?)"?\s*<.*>$/, '$1') : 'Investor Mission 2026';
+      const fromAddress = fromStr.includes('<') ? fromStr.replace(/^.*<([^>]+)>.*$/, '$1') : fromStr;
+      return sendViaBrevo({
+        fromName,
+        fromAddress,
+        to: mailOptions.to,
+        toName,
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text,
+        attachments: mailOptions.attachments || [],
+      });
+    }
+
+    return sendMailWithPortFallback(mailOptions, tag);
+  }
+
   /**
    * Generates a PNG QR code buffer for the given URL/content
    */
@@ -827,16 +1007,16 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_CONFIRMATION');
+      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_CONFIRMATION' });
       if (typeof logger.info === 'function') {
         logger.info('INVESTOR_MISSION_CONFIRMATION_EMAIL_SENT', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId,
+          messageId: info?.messageId || info?.id,
           port,
         });
       }
-      return { success: true, messageId: info?.messageId, port };
+      return { success: true, messageId: info?.messageId || info?.id, port };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
         logger.error('INVESTOR_MISSION_CONFIRMATION_EMAIL_FAILED', {
@@ -924,16 +1104,16 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_REMINDER');
+      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_REMINDER' });
       if (typeof logger.info === 'function') {
         logger.info('INVESTOR_MISSION_REMINDER_EMAIL_SENT', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId,
+          messageId: info?.messageId || info?.id,
           port,
         });
       }
-      return { success: true, messageId: info?.messageId, port };
+      return { success: true, messageId: info?.messageId || info?.id, port };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
         logger.error('INVESTOR_MISSION_REMINDER_EMAIL_FAILED', {
@@ -999,16 +1179,16 @@ function createInvestorMissionEmailService({
     };
 
     try {
-      const { info, port } = await sendMailWithPortFallback(mailOptions, 'INVESTOR_MISSION_ACKNOWLEDGEMENT');
+      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_ACKNOWLEDGEMENT' });
       if (typeof logger.info === 'function') {
         logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId,
+          messageId: info?.messageId || info?.id,
           port,
         });
       }
-      return { success: true, messageId: info?.messageId, port };
+      return { success: true, messageId: info?.messageId || info?.id, port };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
         logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED', {
@@ -1026,6 +1206,96 @@ function createInvestorMissionEmailService({
    */
   async function verifyEmailService({ timeoutMs = 12000 } = {}) {
     const environment = process.env;
+    const provider = getActiveEmailProvider(environment);
+
+    if (provider === 'resend') {
+      const apiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
+      const startTime = Date.now();
+      try {
+        const res = await fetch('https://api.resend.com/api-keys', {
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        const latencyMs = Date.now() - startTime;
+        if (res.ok) {
+          return {
+            ok: true,
+            success: true,
+            provider: 'Resend HTTP API (Port 443)',
+            host: 'api.resend.com',
+            port: 443,
+            latencyMs,
+            message: `Connected successfully to Resend API over HTTPS (Port 443) in ${latencyMs}ms.`,
+          };
+        }
+        return {
+          ok: false,
+          success: false,
+          provider: 'Resend HTTP API (Port 443)',
+          host: 'api.resend.com',
+          port: 443,
+          code: `RESEND_HTTP_${res.status}`,
+          message: `Resend API returned HTTP ${res.status}. Please verify your RESEND_API_KEY.`,
+          latencyMs,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          success: false,
+          provider: 'Resend HTTP API (Port 443)',
+          host: 'api.resend.com',
+          port: 443,
+          code: err.name === 'TimeoutError' ? 'RESEND_TIMEOUT' : 'RESEND_CONN_ERROR',
+          error: err.message,
+          message: `Failed to connect to Resend API: ${err.message}`,
+        };
+      }
+    }
+
+    if (provider === 'brevo') {
+      const apiKey = readFirstDefined(environment, ['BREVO_API_KEY']);
+      const startTime = Date.now();
+      try {
+        const res = await fetch('https://api.brevo.com/v3/account', {
+          headers: { 'api-key': apiKey },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        const latencyMs = Date.now() - startTime;
+        if (res.ok) {
+          return {
+            ok: true,
+            success: true,
+            provider: 'Brevo HTTP API (Port 443)',
+            host: 'api.brevo.com',
+            port: 443,
+            latencyMs,
+            message: `Connected successfully to Brevo API over HTTPS (Port 443) in ${latencyMs}ms.`,
+          };
+        }
+        return {
+          ok: false,
+          success: false,
+          provider: 'Brevo HTTP API (Port 443)',
+          host: 'api.brevo.com',
+          port: 443,
+          code: `BREVO_HTTP_${res.status}`,
+          message: `Brevo API returned HTTP ${res.status}. Please verify your BREVO_API_KEY.`,
+          latencyMs,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          success: false,
+          provider: 'Brevo HTTP API (Port 443)',
+          host: 'api.brevo.com',
+          port: 443,
+          code: err.name === 'TimeoutError' ? 'BREVO_TIMEOUT' : 'BREVO_CONN_ERROR',
+          error: err.message,
+          message: `Failed to connect to Brevo API: ${err.message}`,
+        };
+      }
+    }
+
     let primaryConfig;
     try {
       primaryConfig = resolveTransportConfig(environment);
@@ -1091,13 +1361,18 @@ function createInvestorMissionEmailService({
       }
 
       const latencyMs = Date.now() - startTime;
+      const isTimeout = /timeout/i.test(primaryErr.message) || primaryErr.code === 'ETIMEDOUT';
+      const renderNotice = isTimeout
+        ? ' Note: Render Free Web Services block outbound TCP traffic on ports 25, 465, and 587. Upgrade to a paid Render plan or configure RESEND_API_KEY / BREVO_API_KEY to send over HTTPS port 443.'
+        : '';
+
       return {
         ok: false,
         success: false,
         provider: 'Hostinger SMTP (Nodemailer)',
         code: primaryErr.code || 'SMTP_VERIFY_FAILED',
         error: primaryErr.message,
-        message: `SMTP verification failed on port ${primaryConfig.port}: ${primaryErr.message}`,
+        message: `SMTP verification failed on port ${primaryConfig.port}: ${primaryErr.message}.${renderNotice}`,
         host: primaryConfig.host,
         port: primaryConfig.port,
         secure: primaryConfig.secure,

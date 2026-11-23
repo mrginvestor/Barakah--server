@@ -8,6 +8,7 @@ const { validateImageMagicBytes, UPLOAD_DIR } = require('../middleware/receiptUp
 const { processAndStoreReceipt } = require('../services/receiptStorageService');
 const defaultEmailService = require('../services/webinarEmailService');
 const investorMissionEmailService = require('../services/investorMissionEmailService');
+const { calculateNextRetryAt } = require('../services/investorMissionRetryWorker');
 
 /**
  * Generate separate registration IDs for Small Summit (e.g. SS26-00001)
@@ -1057,6 +1058,8 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
                 confirmationEmailSentAt: new Date(),
                 confirmationEmailLastAttemptAt: new Date(),
                 confirmationEmailLastError: null,
+                confirmationEmailNextRetryAt: null,
+                confirmationEmailLockUntil: null,
               },
               $inc: { confirmationEmailAttempts: 1 },
             }
@@ -1064,6 +1067,8 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
         })
         .catch(err => {
           console.warn('Failed to send Investor Mission confirmation email:', err.message);
+          const currentAttempts = (registration.confirmationEmailAttempts || 0) + 1;
+          const nextRetryAt = typeof calculateNextRetryAt === 'function' ? calculateNextRetryAt(currentAttempts) : new Date(Date.now() + 60000);
           return SummitRegistration.updateOne(
             { _id: registration._id },
             {
@@ -1072,6 +1077,8 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
                 confirmationEmailStatus: 'FAILED',
                 confirmationEmailLastError: String(err.message).slice(0, 500),
                 confirmationEmailLastAttemptAt: new Date(),
+                confirmationEmailNextRetryAt: nextRetryAt,
+                confirmationEmailLockUntil: null,
               },
               $inc: { confirmationEmailAttempts: 1 },
             }
@@ -1586,16 +1593,18 @@ async function checkInParticipant(req, res) {
  */
 async function getAttendanceStats(req, res) {
   try {
-    const attendees = await SummitRegistration.find({
+    let findQuery = SummitRegistration.find({
       $or: [
         { registrationApproved: true, paymentApproved: true },
         { registrationStatus: 'CONFIRMED' },
         { status: 'Confirmed' },
         { status: 'Checked-In' },
       ],
-    })
-      .select('-paymentScreenshotData')
-      .sort({ createdAt: -1 });
+    });
+    if (typeof findQuery.select === 'function') {
+      findQuery = findQuery.select('-paymentScreenshotData');
+    }
+    const attendees = await findQuery.sort({ createdAt: -1 });
 
     const totalConfirmed = attendees.length;
     const totalCheckedIn = attendees.filter(a => a.attendanceStatus === 'CHECKED_IN' || a.status === 'Checked-In').length;
@@ -1622,15 +1631,18 @@ async function getAttendanceStats(req, res) {
  */
 async function exportAttendanceCsv(req, res) {
   try {
-    const attendees = await SummitRegistration.find({
+    let findQuery = SummitRegistration.find({
       $or: [
         { registrationApproved: true, paymentApproved: true },
         { registrationStatus: 'CONFIRMED' },
         { status: 'Confirmed' },
         { status: 'Checked-In' },
       ],
-    })
-      .select('-paymentScreenshotData')
+    });
+    if (typeof findQuery.select === 'function') {
+      findQuery = findQuery.select('-paymentScreenshotData');
+    }
+    const attendees = await findQuery
       .sort({ registrationId: 1 })
       .lean();
 
@@ -1728,6 +1740,8 @@ async function resendConfirmationEmail(req, res) {
     registration.confirmationEmailSentAt = new Date();
     registration.confirmationEmailLastAttemptAt = new Date();
     registration.confirmationEmailLastError = null;
+    registration.confirmationEmailNextRetryAt = null;
+    registration.confirmationEmailLockUntil = null;
     registration.confirmationEmailAttempts = (registration.confirmationEmailAttempts || 0) + 1;
     await registration.save();
 
@@ -1745,10 +1759,14 @@ async function resendConfirmationEmail(req, res) {
   } catch (error) {
     console.error('Error sending confirmation email:', error);
     if (registration) {
+      const attempts = (registration.confirmationEmailAttempts || 0) + 1;
+      const nextRetryAt = typeof calculateNextRetryAt === 'function' ? calculateNextRetryAt(attempts) : new Date(Date.now() + 60000);
       registration.confirmationEmailStatus = 'FAILED';
       registration.confirmationEmailLastError = String(error.message).slice(0, 500);
       registration.confirmationEmailLastAttemptAt = new Date();
-      registration.confirmationEmailAttempts = (registration.confirmationEmailAttempts || 0) + 1;
+      registration.confirmationEmailNextRetryAt = nextRetryAt;
+      registration.confirmationEmailLockUntil = null;
+      registration.confirmationEmailAttempts = attempts;
       await registration.save().catch(() => {});
     }
     return res.status(500).json({
@@ -1756,6 +1774,12 @@ async function resendConfirmationEmail(req, res) {
       message: `Failed to send confirmation email: ${error.message}`,
       emailStatus: 'FAILED',
       error: error.message,
+      attempts: registration?.confirmationEmailAttempts,
+      data: {
+        confirmationEmailStatus: 'FAILED',
+        confirmationEmailLastError: registration?.confirmationEmailLastError,
+        confirmationEmailAttempts: registration?.confirmationEmailAttempts,
+      },
     });
   }
 }
