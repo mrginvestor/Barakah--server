@@ -1849,13 +1849,14 @@ async function resendConfirmationEmail(req, res) {
 }
 
 /**
- * GET /api/admin/investor-mission/email-diagnostic
- * Admin-protected: Verify SMTP / email service health and connection latency.
+ * GET & POST /api/admin/investor-mission/email-diagnostic
+ * Admin-protected: Verify Resend HTTPS API (Port 443) health, latency, domain verification, and optional test send.
  */
 async function getInvestorMissionEmailDiagnostic(req, res) {
   try {
-    const diagnostic = await investorMissionEmailService.verifyEmailService();
-    return res.status(diagnostic.ok ? 200 : 503).json(diagnostic);
+    const testRecipient = req.body?.testRecipient || req.query?.testRecipient || (req.body?.sendTestEmail ? req.admin?.email : null);
+    const diagnostic = await investorMissionEmailService.verifyEmailService({ testRecipient });
+    return res.json(diagnostic);
   } catch (error) {
     return res.status(500).json({
       ok: false,

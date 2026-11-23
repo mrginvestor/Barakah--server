@@ -244,4 +244,135 @@ describe('investorMissionEmailService', () => {
       process.env = originalEnv;
     }
   });
+
+  it('dispatches confirmation email via Resend SDK over HTTPS port 443 with inline CID attachments', async () => {
+    let capturedPayload = null;
+    const mockResend = {
+      emails: {
+        send: async (payload) => {
+          capturedPayload = payload;
+          return { data: { id: 're_mock_test_12345' }, error: null };
+        },
+      },
+    };
+
+    const originalEnv = { ...process.env };
+    process.env.RESEND_API_KEY = 're_test_mock_secret_key';
+    process.env.EMAIL_FROM = 'info@halalwealth.finance';
+    process.env.EMAIL_FROM_NAME = 'Investor Mission 2026';
+
+    try {
+      const service = createInvestorMissionEmailService({ resendClient: mockResend });
+      const result = await service.sendInvestorMissionConfirmation({
+        recipientEmail: 'verified.investor@example.com',
+        participantName: 'Salim Merchant',
+        registrationId: 'SS26-00050',
+        checkInUrl: 'https://halalwealth.finance/api/investor-mission/checkin/verify/salim50',
+      });
+
+      assert.equal(result.success, true);
+      assert.equal(result.messageId, 're_mock_test_12345');
+      assert.equal(result.port, 443);
+
+      assert.ok(capturedPayload);
+      assert.equal(capturedPayload.to[0], 'verified.investor@example.com');
+      assert.equal(capturedPayload.from, '"Investor Mission 2026" <info@halalwealth.finance>');
+      assert.equal(capturedPayload.subject, EMAIL_SUBJECT);
+      assert.ok(Array.isArray(capturedPayload.attachments));
+
+      // QR attachment check
+      const qrAtt = capturedPayload.attachments.find(a => a.contentId === 'participant-checkin-qr');
+      assert.ok(qrAtt, 'Must include QR code with contentId participant-checkin-qr');
+      assert.equal(qrAtt.filename, 'checkin-qr.png');
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('executes live diagnostic verifying Resend API key, authentication, domain, and test email submission', async () => {
+    let sentTestEmail = null;
+    const mockResend = {
+      apiKeys: {
+        list: async () => ({ data: [{ id: 'key_1', name: 'Default' }], error: null }),
+      },
+      domains: {
+        list: async () => ({
+          data: {
+            data: [
+              { name: 'halalwealth.finance', status: 'verified' },
+            ],
+          },
+          error: null,
+        }),
+      },
+      emails: {
+        send: async (payload) => {
+          sentTestEmail = payload;
+          return { data: { id: 're_diagnostic_test_id' }, error: null };
+        },
+      },
+    };
+
+    const originalEnv = { ...process.env };
+    process.env.RESEND_API_KEY = 're_test_diagnostic_key';
+    process.env.EMAIL_FROM = 'info@halalwealth.finance';
+    process.env.EMAIL_FROM_NAME = 'Investor Mission 2026';
+
+    try {
+      const service = createInvestorMissionEmailService({ resendClient: mockResend });
+      const diagnostic = await service.verifyEmailService({ testRecipient: 'admin@halalwealth.finance' });
+
+      assert.equal(diagnostic.ok, true);
+      assert.equal(diagnostic.resendApiConfig, 'READY');
+      assert.equal(diagnostic.senderConfig, 'READY');
+      assert.equal(diagnostic.apiAuthentication, 'SUCCESS');
+      assert.equal(diagnostic.domainVerification, 'VERIFIED');
+      assert.equal(diagnostic.testEmailStatus, 'ACCEPTED');
+      assert.equal(diagnostic.testEmailId, 're_diagnostic_test_id');
+      assert.equal(diagnostic.smtpBypassed, true);
+      assert.equal(diagnostic.transport, 'HTTPS Port 443');
+
+      assert.ok(sentTestEmail);
+      assert.equal(sentTestEmail.to[0], 'admin@halalwealth.finance');
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('sanitizes secrets from error messages when Resend API fails', async () => {
+    const mockResend = {
+      emails: {
+        send: async () => ({
+          data: null,
+          error: {
+            statusCode: 403,
+            name: 'forbidden',
+            message: 'Invalid API key re_super_secret_123456789 provided for Bearer auth',
+          },
+        }),
+      },
+    };
+
+    const originalEnv = { ...process.env };
+    process.env.RESEND_API_KEY = 're_super_secret_123456789';
+
+    try {
+      const service = createInvestorMissionEmailService({ resendClient: mockResend });
+      await assert.rejects(
+        () =>
+          service.sendInvestorMissionConfirmation({
+            recipientEmail: 'participant@example.com',
+            participantName: 'Test',
+            registrationId: 'SS26-00001',
+          }),
+        (err) => {
+          assert.doesNotMatch(err.message, /re_super_secret_123456789/);
+          assert.match(err.message, /re_\*\*\*/);
+          return true;
+        }
+      );
+    } finally {
+      process.env = originalEnv;
+    }
+  });
 });

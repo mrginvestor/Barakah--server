@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const nodemailer = require('nodemailer');
 const QRCode = require('qrcode');
+const { Resend } = require('resend');
 
-const SENDER_EMAIL = 'info@halalwealth.finance';
+const DEFAULT_SENDER_EMAIL = 'info@halalwealth.finance';
 const DEFAULT_FROM_NAME = 'Investor Mission 2026';
 const POSTER_CID = 'investor-mission-poster';
 const QR_CID = 'participant-checkin-qr';
@@ -37,6 +37,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function sanitizeMessage(msg) {
+  if (!msg) return '';
+  return String(msg)
+    .replace(/re_[a-zA-Z0-9_]{6,}/g, 're_***')
+    .replace(/Bearer\s+[a-zA-Z0-9_.-]+/gi, 'Bearer ***')
+    .replace(/key-[a-zA-Z0-9_]{6,}/g, 'key-***')
+    .replace(/xkeysib-[a-zA-Z0-9_]{6,}/g, 'xkeysib-***');
+}
+
 function resolvePosterPath() {
   const candidates = [
     path.resolve(__dirname, '../../assets/investor-mission-poster.jpg'),
@@ -50,12 +59,29 @@ function resolvePosterPath() {
 }
 
 function resolveSenderConfig(environment = process.env, defaultName = DEFAULT_FROM_NAME) {
-  const rawSender = readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_FROM', 'EMAIL_FROM', 'MAIL_FROM', 'SMTP_FROM']) || SENDER_EMAIL;
-  const configuredName = readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_FROM_NAME', 'INVESTOR_MISSION_FROM_NAME']) || defaultName;
+  const rawSender = readFirstDefined(environment, [
+    'INVESTOR_MISSION_EMAIL_FROM',
+    'EMAIL_FROM',
+    'RESEND_FROM',
+    'MAIL_FROM',
+  ]) || DEFAULT_SENDER_EMAIL;
+
+  const configuredName = readFirstDefined(environment, [
+    'INVESTOR_MISSION_EMAIL_FROM_NAME',
+    'EMAIL_FROM_NAME',
+    'RESEND_FROM_NAME',
+    'INVESTOR_MISSION_FROM_NAME',
+  ]) || defaultName;
+
+  const fromAddress = rawSender.includes('<') ? rawSender.replace(/^.*<([^>]+)>.*$/, '$1').trim() : rawSender.trim();
   return {
-    fromName: configuredName,
-    fromAddress: rawSender.includes('<') ? rawSender.replace(/^.*<([^>]+)>.*$/, '$1') : rawSender,
+    fromName: configuredName.trim(),
+    fromAddress,
   };
+}
+
+function getResendApiKey(environment = process.env) {
+  return readFirstDefined(environment, ['RESEND_API_KEY', 'EMAIL_API_KEY']);
 }
 
 /**
@@ -274,7 +300,6 @@ function buildInvestorMissionReminderContent({
 }) {
   const safeName = escapeHtml(participantName || 'Valued Participant');
   const safeRegId = escapeHtml(registrationId || 'Pending');
-  const safeUrl = escapeHtml(checkInUrl || 'https://halalwealth.finance');
 
   const text = `Assalamu Alaikum ${participantName || 'Valued Participant'},
 
@@ -627,122 +652,48 @@ SOLIDARITY TAMIL NADU`;
 }
 
 /**
- * Service Factory for Investor Mission Email operations
+ * Prepares inline attachments with CID tags for Resend SDK/API
+ */
+function prepareResendAttachments(attachments = []) {
+  return attachments.map(att => {
+    let contentBuffer = null;
+    if (Buffer.isBuffer(att.content)) {
+      contentBuffer = att.content;
+    } else if (typeof att.content === 'string') {
+      contentBuffer = Buffer.from(att.content, 'base64');
+    } else if (att.path && fs.existsSync(att.path)) {
+      contentBuffer = fs.readFileSync(att.path);
+    }
+
+    if (!contentBuffer) return null;
+
+    const attachmentObj = {
+      filename: att.filename,
+      content: contentBuffer,
+    };
+
+    if (att.cid) {
+      attachmentObj.contentId = att.cid;
+      attachmentObj.content_id = att.cid;
+    }
+
+    return attachmentObj;
+  }).filter(Boolean);
+}
+
+/**
+ * Service Factory for Investor Mission 2026 Resend HTTPS email operations
+ * Strictly uses Resend HTTPS API over port 443 with ZERO SMTP dependencies.
  */
 function createInvestorMissionEmailService({
-  createTransporter = config => nodemailer.createTransport(config),
+  resendClient = null,
+  sendMailFn = null,
+  createTransporter = null,
   logger = console,
 } = {}) {
-  let cachedTransporter = null;
-  let cachedKey = null;
-
-  function getTransporter(transportConfig) {
-    const key = `${transportConfig.host}:${transportConfig.port}:${transportConfig.auth?.user}:${transportConfig.secure}:${Boolean(transportConfig.pool)}`;
-    if (cachedTransporter && cachedKey === key) {
-      return cachedTransporter;
-    }
-    cachedTransporter = createTransporter(transportConfig);
-    cachedKey = key;
-    return cachedTransporter;
-  }
-
-  function resetTransporter() {
-    if (cachedTransporter && typeof cachedTransporter.close === 'function') {
-      try { cachedTransporter.close(); } catch (_) {}
-    }
-    cachedTransporter = null;
-    cachedKey = null;
-  }
-
-  function resolveTransportConfig(environment = process.env, portOverride = null) {
-    const host = readFirstDefined(environment, ['MAIL_HOST', 'SMTP_HOST']);
-    const configuredPort = Number(readFirstDefined(environment, ['MAIL_PORT', 'SMTP_PORT']) || '465');
-    const port = portOverride ? Number(portOverride) : configuredPort;
-    const username = readFirstDefined(environment, ['MAIL_USERNAME', 'SMTP_USER', 'SMTP_USERNAME', 'MAIL_USER']);
-    const password = readFirstDefined(environment, ['MAIL_PASSWORD', 'SMTP_PASSWORD', 'MAIL_PASS', 'SMTP_PASS']);
-    const useSecureSocket = String(readFirstDefined(environment, ['SMTP_SECURE', 'MAIL_SECURE']) || 'true').toLowerCase() === 'true';
-
-    const isPort465 = port === 465;
-    const isPort587 = port === 587;
-    const secure = isPort465 ? true : (isPort587 ? false : useSecureSocket);
-    const requireTLS = isPort587 ? true : (!secure && port !== 465);
-
-    if (!host || !username || !password || !Number.isInteger(port) || port < 1) {
-      const error = new Error('Email service configuration is incomplete: SMTP host, user, or pass missing.');
-      error.code = 'EMAIL_CONFIG_INCOMPLETE';
-      throw error;
-    }
-
-    const connectionTimeout = Number(readFirstDefined(environment, ['SMTP_CONNECTION_TIMEOUT_MS']) || 15000);
-    const greetingTimeout = Number(readFirstDefined(environment, ['SMTP_GREETING_TIMEOUT_MS']) || 15000);
-    const socketTimeout = Number(readFirstDefined(environment, ['SMTP_SOCKET_TIMEOUT_MS']) || 25000);
-
-    return {
-      host,
-      port,
-      secure,
-      requireTLS,
-      family: 4,
-      pool: false,
-      connectionTimeout,
-      greetingTimeout,
-      socketTimeout,
-      auth: { user: username, pass: password },
-    };
-  }
-
-  async function sendMailWithPortFallback(mailOptions, tag = 'CONFIRMATION') {
-    const environment = process.env;
-    const primaryConfig = resolveTransportConfig(environment);
-    const fallbackPort = primaryConfig.port === 465 ? 587 : (primaryConfig.port === 587 ? 465 : null);
-
-    const transporter = getTransporter(primaryConfig);
-    try {
-      const info = await transporter.sendMail(mailOptions);
-      return { info, port: primaryConfig.port };
-    } catch (primaryErr) {
-      resetTransporter();
-      const isTimeoutOrConnError =
-        /timeout/i.test(primaryErr.message) ||
-        primaryErr.code === 'ETIMEDOUT' ||
-        primaryErr.code === 'ESOCKETTIMEDOUT' ||
-        primaryErr.code === 'ECONNRESET' ||
-        primaryErr.code === 'ECONNREFUSED';
-
-      if (fallbackPort && isTimeoutOrConnError) {
-        if (typeof logger.warn === 'function') {
-          logger.warn(`[${tag}] Primary SMTP port ${primaryConfig.port} failed (${primaryErr.message}). Retrying on fallback port ${fallbackPort}...`);
-        }
-        const fallbackConfig = resolveTransportConfig(environment, fallbackPort);
-        const fallbackTransporter = createTransporter(fallbackConfig);
-        try {
-          const info = await fallbackTransporter.sendMail(mailOptions);
-          if (typeof logger.info === 'function') {
-            logger.info(`[${tag}] Email sent successfully via fallback port ${fallbackPort}.`);
-          }
-          return { info, port: fallbackPort };
-        } catch (fallbackErr) {
-          if (typeof logger.error === 'function') {
-            logger.error(`[${tag}] Fallback SMTP port ${fallbackPort} also failed: ${fallbackErr.message}`);
-          }
-          throw fallbackErr;
-        }
-      }
-      throw primaryErr;
-    }
-  }
-
-  function getActiveEmailProvider(environment = process.env) {
-    const explicit = (readFirstDefined(environment, ['INVESTOR_MISSION_EMAIL_PROVIDER', 'EMAIL_PROVIDER', 'MAIL_PROVIDER']) || '').toLowerCase();
-    if (explicit === 'resend') return 'resend';
-    if (explicit === 'brevo') return 'brevo';
-    if (explicit === 'smtp') return 'smtp';
-
-    if (readFirstDefined(environment, ['RESEND_API_KEY'])) return 'resend';
-    if (readFirstDefined(environment, ['BREVO_API_KEY'])) return 'brevo';
-    return 'smtp';
-  }
-
+  /**
+   * Dispatches email via Resend HTTPS API (Port 443)
+   */
   async function sendViaResend({
     fromName,
     fromAddress,
@@ -751,27 +702,45 @@ function createInvestorMissionEmailService({
     html,
     text,
     attachments = [],
-    apiKey = readFirstDefined(process.env, ['RESEND_API_KEY']),
+    apiKey = getResendApiKey(process.env),
   }) {
-    if (!apiKey) {
-      throw new Error('RESEND_API_KEY is missing from environment.');
+    // If unit test injected mock sendMailFn or createTransporter:
+    if (typeof sendMailFn === 'function') {
+      return sendMailFn({ from: `"${fromName}" <${fromAddress}>`, to, subject, html, text, attachments });
+    }
+    if (typeof createTransporter === 'function') {
+      const mockTransporter = createTransporter();
+      if (mockTransporter && typeof mockTransporter.sendMail === 'function') {
+        const info = await mockTransporter.sendMail({
+          from: `"${fromName}" <${fromAddress}>`,
+          to,
+          subject,
+          html,
+          text,
+          attachments,
+        });
+        return { success: true, messageId: info?.messageId || info?.id, info, port: 443 };
+      }
     }
 
-    const resendAttachments = attachments.map(att => {
-      let contentBase64;
-      if (Buffer.isBuffer(att.content)) {
-        contentBase64 = att.content.toString('base64');
-      } else if (att.path && fs.existsSync(att.path)) {
-        contentBase64 = fs.readFileSync(att.path).toString('base64');
-      }
-      return {
-        filename: att.filename,
-        content: contentBase64,
-      };
-    }).filter(att => Boolean(att.content));
+    if (!apiKey) {
+      const err = new Error('RESEND_API_KEY is missing from environment. Configure RESEND_API_KEY in Render.');
+      err.code = 'RESEND_API_KEY_MISSING';
+      throw err;
+    }
 
+    if (!fromAddress || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromAddress)) {
+      const err = new Error(`Invalid sender email address: "${fromAddress}"`);
+      err.code = 'INVALID_SENDER_ADDRESS';
+      throw err;
+    }
+
+    const resend = resendClient || new Resend(apiKey);
+    const resendAttachments = prepareResendAttachments(attachments);
+
+    const cleanFrom = `"${fromName.replace(/"/g, '')}" <${fromAddress}>`;
     const payload = {
-      from: `${fromName} <${fromAddress}>`,
+      from: cleanFrom,
       to: Array.isArray(to) ? to : [to],
       subject,
       html,
@@ -779,137 +748,23 @@ function createInvestorMissionEmailService({
       attachments: resendAttachments.length ? resendAttachments : undefined,
     };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const { data, error } = await resend.emails.send(payload);
 
-    try {
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(`Resend API error (${res.status}): ${data.message || res.statusText || 'Unknown error'}`);
-      }
-
-      return {
-        info: { messageId: data.id, id: data.id },
-        port: 443,
-        provider: 'Resend HTTP API (Port 443)',
-      };
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  async function sendViaBrevo({
-    fromName,
-    fromAddress,
-    to,
-    toName,
-    subject,
-    html,
-    text,
-    attachments = [],
-    apiKey = readFirstDefined(process.env, ['BREVO_API_KEY']),
-  }) {
-    if (!apiKey) {
-      throw new Error('BREVO_API_KEY is missing from environment.');
+    if (error) {
+      const cleanErrorMsg = sanitizeMessage(error.message || error.name || 'Unknown Resend error');
+      const err = new Error(`Resend API error (${error.statusCode || 500}): ${cleanErrorMsg}`);
+      err.code = error.name || 'RESEND_API_ERROR';
+      err.statusCode = error.statusCode;
+      throw err;
     }
 
-    const brevoAttachments = attachments.map(att => {
-      let contentBase64;
-      if (Buffer.isBuffer(att.content)) {
-        contentBase64 = att.content.toString('base64');
-      } else if (att.path && fs.existsSync(att.path)) {
-        contentBase64 = fs.readFileSync(att.path).toString('base64');
-      }
-      return {
-        name: att.filename,
-        content: contentBase64,
-      };
-    }).filter(att => Boolean(att.content));
-
-    const payload = {
-      sender: { name: fromName, email: fromAddress },
-      to: [{ email: to, name: toName || to }],
-      subject,
-      htmlContent: html,
-      textContent: text,
-      attachment: brevoAttachments.length ? brevoAttachments : undefined,
+    return {
+      success: true,
+      provider: 'Resend HTTPS API (Port 443)',
+      port: 443,
+      info: { messageId: data?.id, id: data?.id },
+      id: data?.id,
     };
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-    try {
-      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-        method: 'POST',
-        headers: {
-          'api-key': apiKey,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(`Brevo API error (${res.status}): ${data.message || res.statusText || 'Unknown error'}`);
-      }
-
-      return {
-        info: { messageId: data.messageId },
-        port: 443,
-        provider: 'Brevo HTTP API (Port 443)',
-      };
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  async function sendMailDispatch(mailOptions, { toName = '', tag = 'CONFIRMATION' } = {}) {
-    const provider = getActiveEmailProvider(process.env);
-
-    if (provider === 'resend') {
-      const fromStr = mailOptions.from || '';
-      const fromName = fromStr.includes('<') ? fromStr.replace(/^"?(.*?)"?\s*<.*>$/, '$1') : 'Investor Mission 2026';
-      const fromAddress = fromStr.includes('<') ? fromStr.replace(/^.*<([^>]+)>.*$/, '$1') : fromStr;
-      return sendViaResend({
-        fromName,
-        fromAddress,
-        to: mailOptions.to,
-        subject: mailOptions.subject,
-        html: mailOptions.html,
-        text: mailOptions.text,
-        attachments: mailOptions.attachments || [],
-      });
-    }
-
-    if (provider === 'brevo') {
-      const fromStr = mailOptions.from || '';
-      const fromName = fromStr.includes('<') ? fromStr.replace(/^"?(.*?)"?\s*<.*>$/, '$1') : 'Investor Mission 2026';
-      const fromAddress = fromStr.includes('<') ? fromStr.replace(/^.*<([^>]+)>.*$/, '$1') : fromStr;
-      return sendViaBrevo({
-        fromName,
-        fromAddress,
-        to: mailOptions.to,
-        toName,
-        subject: mailOptions.subject,
-        html: mailOptions.html,
-        text: mailOptions.text,
-        attachments: mailOptions.attachments || [],
-      });
-    }
-
-    return sendMailWithPortFallback(mailOptions, tag);
   }
 
   /**
@@ -929,7 +784,7 @@ function createInvestorMissionEmailService({
   }
 
   /**
-   * Send Investor Mission Confirmation Email
+   * Send Investor Mission Confirmation Email via Resend HTTPS (Port 443)
    */
   async function sendInvestorMissionConfirmation({
     recipientEmail,
@@ -952,7 +807,6 @@ function createInvestorMissionEmailService({
 
     const verificationUrl = checkInUrl || `https://halalwealth.finance/api/investor-mission/checkin/verify/${registrationId}`;
 
-    // Generate QR Buffer
     let qrBuffer;
     try {
       qrBuffer = await generateQrBuffer(verificationUrl);
@@ -963,9 +817,6 @@ function createInvestorMissionEmailService({
 
     const posterPath = resolvePosterPath();
     const hasPoster = fs.existsSync(posterPath);
-    if (!hasPoster) {
-      logger.warn(`Investor Mission poster not found at ${posterPath}; proceeding with external/hosted fallback.`);
-    }
 
     const messageContent = buildInvestorMissionConfirmationContent({
       participantName,
@@ -983,7 +834,6 @@ function createInvestorMissionEmailService({
         content: qrBuffer,
         cid: QR_CID,
         contentType: 'image/png',
-        contentDisposition: 'inline',
       },
     ];
 
@@ -993,36 +843,35 @@ function createInvestorMissionEmailService({
         path: posterPath,
         cid: POSTER_CID,
         contentType: 'image/jpeg',
-        contentDisposition: 'inline',
       });
     }
 
-    const mailOptions = {
-      from: `"${fromName}" <${fromAddress}>`,
-      to: cleanRecipient,
-      subject: messageContent.subject,
-      text: messageContent.text,
-      html: messageContent.html,
-      attachments,
-    };
-
     try {
-      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_CONFIRMATION' });
+      const result = await sendViaResend({
+        fromName,
+        fromAddress,
+        to: cleanRecipient,
+        subject: messageContent.subject,
+        html: messageContent.html,
+        text: messageContent.text,
+        attachments,
+      });
+
       if (typeof logger.info === 'function') {
-        logger.info('INVESTOR_MISSION_CONFIRMATION_EMAIL_SENT', {
+        logger.info('INVESTOR_MISSION_CONFIRMATION_EMAIL_SENT_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId || info?.id,
-          port,
+          messageId: result?.id || result?.info?.messageId,
+          port: 443,
         });
       }
-      return { success: true, messageId: info?.messageId || info?.id, port };
+      return { success: true, messageId: result?.id || result?.info?.messageId, port: 443 };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
-        logger.error('INVESTOR_MISSION_CONFIRMATION_EMAIL_FAILED', {
+        logger.error('INVESTOR_MISSION_CONFIRMATION_EMAIL_FAILED_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          error: sendErr.message,
+          error: sanitizeMessage(sendErr.message),
         });
       }
       throw sendErr;
@@ -1030,7 +879,7 @@ function createInvestorMissionEmailService({
   }
 
   /**
-   * Send Investor Mission Reminder Email
+   * Send Investor Mission Reminder Email via Resend HTTPS (Port 443)
    */
   async function sendInvestorMissionReminder({
     recipientEmail,
@@ -1080,7 +929,6 @@ function createInvestorMissionEmailService({
         content: qrBuffer,
         cid: QR_CID,
         contentType: 'image/png',
-        contentDisposition: 'inline',
       },
     ];
 
@@ -1090,36 +938,35 @@ function createInvestorMissionEmailService({
         path: posterPath,
         cid: POSTER_CID,
         contentType: 'image/jpeg',
-        contentDisposition: 'inline',
       });
     }
 
-    const mailOptions = {
-      from: `"${fromName}" <${fromAddress}>`,
-      to: cleanRecipient,
-      subject: messageContent.subject,
-      text: messageContent.text,
-      html: messageContent.html,
-      attachments,
-    };
-
     try {
-      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_REMINDER' });
+      const result = await sendViaResend({
+        fromName,
+        fromAddress,
+        to: cleanRecipient,
+        subject: messageContent.subject,
+        html: messageContent.html,
+        text: messageContent.text,
+        attachments,
+      });
+
       if (typeof logger.info === 'function') {
-        logger.info('INVESTOR_MISSION_REMINDER_EMAIL_SENT', {
+        logger.info('INVESTOR_MISSION_REMINDER_EMAIL_SENT_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId || info?.id,
-          port,
+          messageId: result?.id || result?.info?.messageId,
+          port: 443,
         });
       }
-      return { success: true, messageId: info?.messageId || info?.id, port };
+      return { success: true, messageId: result?.id || result?.info?.messageId, port: 443 };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
-        logger.error('INVESTOR_MISSION_REMINDER_EMAIL_FAILED', {
+        logger.error('INVESTOR_MISSION_REMINDER_EMAIL_FAILED_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          error: sendErr.message,
+          error: sanitizeMessage(sendErr.message),
         });
       }
       throw sendErr;
@@ -1127,7 +974,7 @@ function createInvestorMissionEmailService({
   }
 
   /**
-   * Send Investor Mission Registration Acknowledgement Email
+   * Send Investor Mission Registration Acknowledgement Email via Resend HTTPS (Port 443)
    */
   async function sendInvestorMissionAcknowledgement({
     recipientEmail,
@@ -1165,36 +1012,35 @@ function createInvestorMissionEmailService({
         path: posterPath,
         cid: POSTER_CID,
         contentType: 'image/jpeg',
-        contentDisposition: 'inline',
       });
     }
 
-    const mailOptions = {
-      from: `"${fromName}" <${fromAddress}>`,
-      to: cleanRecipient,
-      subject: messageContent.subject,
-      text: messageContent.text,
-      html: messageContent.html,
-      attachments,
-    };
-
     try {
-      const { info, port } = await sendMailDispatch(mailOptions, { toName: participantName, tag: 'INVESTOR_MISSION_ACKNOWLEDGEMENT' });
+      const result = await sendViaResend({
+        fromName,
+        fromAddress,
+        to: cleanRecipient,
+        subject: messageContent.subject,
+        html: messageContent.html,
+        text: messageContent.text,
+        attachments,
+      });
+
       if (typeof logger.info === 'function') {
-        logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT', {
+        logger.info('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_SENT_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          messageId: info?.messageId || info?.id,
-          port,
+          messageId: result?.id || result?.info?.messageId,
+          port: 443,
         });
       }
-      return { success: true, messageId: info?.messageId || info?.id, port };
+      return { success: true, messageId: result?.id || result?.info?.messageId, port: 443 };
     } catch (sendErr) {
       if (typeof logger.error === 'function') {
-        logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED', {
+        logger.error('INVESTOR_MISSION_ACKNOWLEDGEMENT_EMAIL_FAILED_RESEND', {
           recipient: cleanRecipient,
           registrationId,
-          error: sendErr.message,
+          error: sanitizeMessage(sendErr.message),
         });
       }
       throw sendErr;
@@ -1202,183 +1048,177 @@ function createInvestorMissionEmailService({
   }
 
   /**
-   * Diagnostic verification of SMTP connection without sending email
+   * Secure Live Diagnostic Action (Admin Only):
+   * Tests:
+   * A. Resend API key configuration
+   * B. Sender address configuration & domain extraction
+   * C. HTTPS connectivity to api.resend.com on port 443
+   * D. Resend API authentication
+   * E. Domain verification status via Resend Domains API
+   * F. Optional test email submission to admin-configured test recipient
+   * G. Sanitized error reporting with secrets redacted
    */
-  async function verifyEmailService({ timeoutMs = 12000 } = {}) {
+  async function verifyEmailService({
+    testRecipient = null,
+    timeoutMs = 10000,
+  } = {}) {
     const environment = process.env;
-    const provider = getActiveEmailProvider(environment);
+    const apiKey = getResendApiKey(environment);
+    const { fromName, fromAddress } = resolveSenderConfig(environment);
 
-    if (provider === 'resend') {
-      const apiKey = readFirstDefined(environment, ['RESEND_API_KEY']);
-      const startTime = Date.now();
-      try {
-        const res = await fetch('https://api.resend.com/api-keys', {
-          headers: { 'Authorization': `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        const latencyMs = Date.now() - startTime;
-        if (res.ok) {
-          return {
-            ok: true,
-            success: true,
-            provider: 'Resend HTTP API (Port 443)',
-            host: 'api.resend.com',
-            port: 443,
-            latencyMs,
-            message: `Connected successfully to Resend API over HTTPS (Port 443) in ${latencyMs}ms.`,
-          };
-        }
-        return {
-          ok: false,
-          success: false,
-          provider: 'Resend HTTP API (Port 443)',
-          host: 'api.resend.com',
-          port: 443,
-          code: `RESEND_HTTP_${res.status}`,
-          message: `Resend API returned HTTP ${res.status}. Please verify your RESEND_API_KEY.`,
-          latencyMs,
-        };
-      } catch (err) {
-        return {
-          ok: false,
-          success: false,
-          provider: 'Resend HTTP API (Port 443)',
-          host: 'api.resend.com',
-          port: 443,
-          code: err.name === 'TimeoutError' ? 'RESEND_TIMEOUT' : 'RESEND_CONN_ERROR',
-          error: err.message,
-          message: `Failed to connect to Resend API: ${err.message}`,
-        };
-      }
-    }
+    const resendApiConfig = apiKey ? 'READY' : 'MISSING';
+    const isSenderValid = Boolean(fromAddress && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fromAddress));
+    const senderConfig = isSenderValid ? 'READY' : 'MISSING';
 
-    if (provider === 'brevo') {
-      const apiKey = readFirstDefined(environment, ['BREVO_API_KEY']);
-      const startTime = Date.now();
-      try {
-        const res = await fetch('https://api.brevo.com/v3/account', {
-          headers: { 'api-key': apiKey },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        const latencyMs = Date.now() - startTime;
-        if (res.ok) {
-          return {
-            ok: true,
-            success: true,
-            provider: 'Brevo HTTP API (Port 443)',
-            host: 'api.brevo.com',
-            port: 443,
-            latencyMs,
-            message: `Connected successfully to Brevo API over HTTPS (Port 443) in ${latencyMs}ms.`,
-          };
-        }
-        return {
-          ok: false,
-          success: false,
-          provider: 'Brevo HTTP API (Port 443)',
-          host: 'api.brevo.com',
-          port: 443,
-          code: `BREVO_HTTP_${res.status}`,
-          message: `Brevo API returned HTTP ${res.status}. Please verify your BREVO_API_KEY.`,
-          latencyMs,
-        };
-      } catch (err) {
-        return {
-          ok: false,
-          success: false,
-          provider: 'Brevo HTTP API (Port 443)',
-          host: 'api.brevo.com',
-          port: 443,
-          code: err.name === 'TimeoutError' ? 'BREVO_TIMEOUT' : 'BREVO_CONN_ERROR',
-          error: err.message,
-          message: `Failed to connect to Brevo API: ${err.message}`,
-        };
-      }
-    }
+    const senderDomain = isSenderValid ? fromAddress.split('@')[1]?.toLowerCase() : '';
+    const isSandboxDomain = senderDomain === 'resend.dev';
 
-    let primaryConfig;
-    try {
-      primaryConfig = resolveTransportConfig(environment);
-    } catch (cfgErr) {
-      return {
-        ok: false,
-        success: false,
-        code: cfgErr.code || 'EMAIL_CONFIG_INCOMPLETE',
-        message: cfgErr.message,
-        host: environment.SMTP_HOST || environment.EMAIL_HOST || 'smtp.hostinger.com',
-        port: Number(environment.SMTP_PORT || environment.EMAIL_PORT) || 465,
-      };
-    }
+    let httpsConnectivity = 'FAILED';
+    let apiAuthentication = 'NOT_TESTED';
+    let domainVerification = 'NOT_TESTED';
+    let testEmailStatus = 'NOT_REQUESTED';
+    let testEmailId = null;
+    let providerError = null;
+    let latencyMs = 0;
 
-    const testTransporter = createTransporter({
-      ...primaryConfig,
-      connectionTimeout: timeoutMs,
-      greetingTimeout: timeoutMs,
-      socketTimeout: timeoutMs + 3000,
-    });
-
+    // 1. Test HTTPS Port 443 Connectivity to api.resend.com
     const startTime = Date.now();
     try {
-      await testTransporter.verify();
-      const latencyMs = Date.now() - startTime;
-      return {
-        ok: true,
-        success: true,
-        provider: 'Hostinger SMTP (Nodemailer)',
-        host: primaryConfig.host,
-        port: primaryConfig.port,
-        secure: primaryConfig.secure,
-        authenticatedUser: primaryConfig.auth?.user,
-        latencyMs,
-        message: `SMTP connected successfully to ${primaryConfig.host}:${primaryConfig.port} in ${latencyMs}ms.`,
-      };
-    } catch (primaryErr) {
-      const fallbackPort = primaryConfig.port === 465 ? 587 : (primaryConfig.port === 587 ? 465 : null);
-      if (fallbackPort) {
-        try {
-          const fallbackConfig = resolveTransportConfig(environment, fallbackPort);
-          const fallbackTransporter = createTransporter({
-            ...fallbackConfig,
-            connectionTimeout: timeoutMs,
-            greetingTimeout: timeoutMs,
-            socketTimeout: timeoutMs + 3000,
-          });
-          const fbStartTime = Date.now();
-          await fallbackTransporter.verify();
-          const fbLatency = Date.now() - fbStartTime;
-          return {
-            ok: true,
-            success: true,
-            provider: 'Hostinger SMTP (Nodemailer)',
-            host: fallbackConfig.host,
-            port: fallbackConfig.port,
-            secure: fallbackConfig.secure,
-            authenticatedUser: fallbackConfig.auth?.user,
-            latencyMs: fbLatency,
-            message: `SMTP connected on fallback port ${fallbackPort} in ${fbLatency}ms (primary port ${primaryConfig.port} failed: ${primaryErr.message}).`,
-          };
-        } catch (_) {}
-      }
-
-      const latencyMs = Date.now() - startTime;
-      const isTimeout = /timeout/i.test(primaryErr.message) || primaryErr.code === 'ETIMEDOUT';
-      const renderNotice = isTimeout
-        ? ' Note: Render Free Web Services block outbound TCP traffic on ports 25, 465, and 587. Upgrade to a paid Render plan or configure RESEND_API_KEY / BREVO_API_KEY to send over HTTPS port 443.'
-        : '';
-
-      return {
-        ok: false,
-        success: false,
-        provider: 'Hostinger SMTP (Nodemailer)',
-        code: primaryErr.code || 'SMTP_VERIFY_FAILED',
-        error: primaryErr.message,
-        message: `SMTP verification failed on port ${primaryConfig.port}: ${primaryErr.message}.${renderNotice}`,
-        host: primaryConfig.host,
-        port: primaryConfig.port,
-        secure: primaryConfig.secure,
-        latencyMs,
-      };
+      const connTest = await fetch('https://api.resend.com/emails', {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
+      }).catch(async () => {
+        return fetch('https://api.resend.com', {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(Math.min(timeoutMs, 5000)),
+        });
+      });
+      latencyMs = Date.now() - startTime;
+      httpsConnectivity = connTest ? 'SUCCESS' : 'FAILED';
+    } catch (netErr) {
+      latencyMs = Date.now() - startTime;
+      httpsConnectivity = 'FAILED';
+      providerError = `HTTPS port 443 connection failed: ${sanitizeMessage(netErr.message)}`;
     }
+
+    // 2. Test Resend API Authentication & Domain Verification
+    if (apiKey) {
+      const resend = resendClient || new Resend(apiKey);
+      try {
+        const authStartTime = Date.now();
+        const apiKeysRes = await resend.apiKeys.list();
+        latencyMs = Date.now() - authStartTime;
+
+        if (apiKeysRes.error) {
+          apiAuthentication = 'FAILED';
+          providerError = sanitizeMessage(apiKeysRes.error.message || 'API key authentication failed.');
+        } else {
+          apiAuthentication = 'SUCCESS';
+
+          // 3. Check Domain Verification
+          if (isSandboxDomain) {
+            domainVerification = 'SANDBOX';
+          } else {
+            try {
+              const domainsRes = await resend.domains.list();
+              if (domainsRes.data && Array.isArray(domainsRes.data.data)) {
+                const foundDomain = domainsRes.data.data.find(d => d.name?.toLowerCase() === senderDomain);
+                if (foundDomain) {
+                  domainVerification = foundDomain.status === 'verified' ? 'VERIFIED' : 'PENDING';
+                } else {
+                  domainVerification = 'NOT_REGISTERED';
+                }
+              } else if (domainsRes.data && Array.isArray(domainsRes.data)) {
+                const foundDomain = domainsRes.data.find(d => d.name?.toLowerCase() === senderDomain);
+                if (foundDomain) {
+                  domainVerification = foundDomain.status === 'verified' ? 'VERIFIED' : 'PENDING';
+                } else {
+                  domainVerification = 'NOT_REGISTERED';
+                }
+              } else {
+                domainVerification = 'UNKNOWN';
+              }
+            } catch (_) {
+              domainVerification = 'CHECK_FAILED';
+            }
+          }
+        }
+      } catch (authErr) {
+        apiAuthentication = 'FAILED';
+        providerError = sanitizeMessage(authErr.message);
+      }
+    } else {
+      apiAuthentication = 'MISSING';
+      providerError = 'RESEND_API_KEY environment variable is not configured on Render.';
+    }
+
+    // 4. Test Email Submission (only if admin explicitly configured a test recipient)
+    if (testRecipient && apiAuthentication === 'SUCCESS' && isSenderValid) {
+      const cleanTestRecipient = String(testRecipient).trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanTestRecipient)) {
+        try {
+          const testRes = await sendViaResend({
+            fromName: `${fromName} [Test]`,
+            fromAddress,
+            to: cleanTestRecipient,
+            subject: 'Diagnostic Test | Investor Mission 2026 Resend API',
+            text: `Assalamu Alaikum,\n\nThis is an automated diagnostic test verifying that the Investor Mission 2026 Resend HTTPS email delivery service (Port 443) is working correctly.\n\nTimestamp: ${new Date().toISOString()}\nSender: ${fromName} <${fromAddress}>\nRecipient: ${cleanTestRecipient}\n\nJazakAllahu Khairan,\nSIO Coimbatore`,
+            html: `<div style="font-family:sans-serif;padding:20px;color:#053726;"><h2 style="color:#053726;">Investor Mission 2026 Email Diagnostic</h2><p>This automated test confirms that the <strong>Resend HTTPS API over Port 443</strong> is operating and accepted this email for delivery.</p><p style="color:#64748b;font-size:13px;">Timestamp: ${new Date().toISOString()}</p></div>`,
+          });
+          testEmailStatus = 'ACCEPTED';
+          testEmailId = testRes?.id || testRes?.info?.messageId;
+        } catch (testSendErr) {
+          testEmailStatus = 'FAILED';
+          providerError = sanitizeMessage(testSendErr.message);
+        }
+      } else {
+        testEmailStatus = 'INVALID_RECIPIENT';
+      }
+    }
+
+    const isHealthy =
+      resendApiConfig === 'READY' &&
+      senderConfig === 'READY' &&
+      httpsConnectivity === 'SUCCESS' &&
+      apiAuthentication === 'SUCCESS';
+
+    let summaryMessage = '';
+    if (isHealthy) {
+      summaryMessage = `Resend HTTPS API is READY over Port 443 (Latency: ${latencyMs}ms). Outbound SMTP is not used.`;
+      if (domainVerification === 'PENDING') {
+        summaryMessage += ` Note: Domain '${senderDomain}' is registered in Resend but status is PENDING verification. Ensure DKIM/SPF DNS records are added in Hostinger DNS.`;
+      } else if (domainVerification === 'NOT_REGISTERED') {
+        summaryMessage += ` Note: Domain '${senderDomain}' is not registered in Resend yet. Add it at https://resend.com/domains or use onboarding@resend.dev for test mode.`;
+      }
+      if (testEmailStatus === 'ACCEPTED') {
+        summaryMessage += ` Test email accepted by Resend (ID: ${testEmailId}). Note: Resend accepted the email for delivery; final inbox delivery depends on recipient mailbox.`;
+      }
+    } else {
+      summaryMessage = `Resend configuration incomplete or unverified. ${providerError || 'Check Render environment variables.'}`;
+    }
+
+    return {
+      ok: isHealthy,
+      success: isHealthy,
+      provider: 'Resend HTTPS API (Port 443)',
+      transport: 'HTTPS Port 443',
+      host: 'api.resend.com',
+      port: 443,
+      smtpBypassed: true,
+      resendApiConfig,
+      senderConfig,
+      httpsConnectivity,
+      apiAuthentication,
+      domainVerification,
+      sender: `"${fromName}" <${fromAddress}>`,
+      senderEmail: fromAddress,
+      senderDomain,
+      latencyMs,
+      testEmailStatus,
+      testEmailId,
+      message: summaryMessage,
+      error: providerError,
+    };
   }
 
   return {
@@ -1391,7 +1231,6 @@ function createInvestorMissionEmailService({
     generateQrBuffer,
     resolvePosterPath,
     verifyEmailService,
-    resetTransporter,
   };
 }
 
