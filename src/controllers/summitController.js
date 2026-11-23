@@ -863,15 +863,29 @@ async function getAdminSummitStats(req, res) {
 }
 
 /**
- * GET /api/admin/summit/receipt/:registrationId
- * Protected image streaming endpoint for admins.
+ * GET /api/admin/investor-mission/receipt/:registrationId
+ * Protected image streaming endpoint for authorized admins.
+ * Streams JPEG, PNG, WEBP receipts with proper Content-Type directly from MongoDB Atlas or cloud storage.
  */
 async function getPaymentReceiptFile(req, res) {
   try {
-    const { registrationId } = req.params;
-    const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
+    const rawId = String(req.params.registrationId || '').trim();
+    if (!rawId) {
+      return res.status(400).json({ success: false, message: 'Registration ID is required.' });
+    }
 
-    if (!registration || (!registration.paymentScreenshot && !registration.paymentScreenshotData && !registration.paymentScreenshotUrl)) {
+    const mongoose = require('mongoose');
+    const query = {
+      $or: [
+        { registrationId: rawId },
+        { registrationId: rawId.toUpperCase() },
+        ...(mongoose.Types.ObjectId.isValid(rawId) ? [{ _id: rawId }] : []),
+      ],
+    };
+
+    const registration = await SummitRegistration.findOne(query);
+
+    if (!registration) {
       return res.status(404).json({
         success: false,
         code: 'RECEIPT_NOT_FOUND',
@@ -879,29 +893,79 @@ async function getPaymentReceiptFile(req, res) {
       });
     }
 
-    // 1. Cloud storage redirect if cloud URL exists
-    if (registration.paymentScreenshotUrl && /^https?:\/\//i.test(registration.paymentScreenshotUrl)) {
-      return res.redirect(registration.paymentScreenshotUrl);
+    // 1. Persistent binary buffer stored directly in MongoDB Atlas
+    let buffer = null;
+    if (registration.paymentScreenshotData) {
+      if (Buffer.isBuffer(registration.paymentScreenshotData)) {
+        buffer = registration.paymentScreenshotData;
+      } else if (registration.paymentScreenshotData.buffer && Buffer.isBuffer(registration.paymentScreenshotData.buffer)) {
+        buffer = registration.paymentScreenshotData.buffer;
+      } else {
+        try {
+          buffer = Buffer.from(registration.paymentScreenshotData);
+        } catch (_) {}
+      }
     }
 
-    // 2. Persistent binary buffer stored directly in MongoDB Atlas
-    if (registration.paymentScreenshotData && Buffer.isBuffer(registration.paymentScreenshotData) && registration.paymentScreenshotData.length > 0) {
+    if (buffer && buffer.length > 0) {
       const mime = registration.paymentScreenshotMimeType || 'image/jpeg';
       res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Length', registration.paymentScreenshotData.length);
+      res.setHeader('Content-Length', buffer.length);
       res.setHeader('Cache-Control', 'private, max-age=86400');
-      res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot || 'receipt.jpg'}"`);
-      return res.end(registration.paymentScreenshotData);
+      res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot || `${registration.registrationId}-receipt.jpg`}"`);
+      return res.end(buffer);
+    }
+
+    // 2. Cloud storage URL (e.g. Cloudinary) - proxy stream directly to avoid browser CORS/Auth header issues
+    if (registration.paymentScreenshotUrl && /^https?:\/\//i.test(registration.paymentScreenshotUrl)) {
+      try {
+        const cloudRes = await fetch(registration.paymentScreenshotUrl, {
+          signal: AbortSignal.timeout(10000),
+        });
+        if (cloudRes.ok) {
+          const arrayBuffer = await cloudRes.arrayBuffer();
+          const cloudBuffer = Buffer.from(arrayBuffer);
+          const mime = cloudRes.headers.get('content-type') || registration.paymentScreenshotMimeType || 'image/jpeg';
+
+          // Backfill into MongoDB Atlas so future retrievals don't even need the external roundtrip
+          registration.paymentScreenshotData = cloudBuffer;
+          registration.paymentScreenshotSize = cloudBuffer.length;
+          registration.paymentScreenshotMimeType = mime;
+          await registration.save().catch(() => {});
+
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', cloudBuffer.length);
+          res.setHeader('Cache-Control', 'private, max-age=86400');
+          res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot || `${registration.registrationId}-receipt.jpg`}"`);
+          return res.end(cloudBuffer);
+        }
+      } catch (cloudErr) {
+        console.warn(`[getPaymentReceiptFile] Failed to proxy cloud URL for ${rawId}:`, cloudErr.message);
+      }
     }
 
     // 3. Fallback: check local disk cache
     if (registration.paymentScreenshot) {
-      const filePath = path.join(UPLOAD_DIR, registration.paymentScreenshot);
-      if (fs.existsSync(filePath)) {
-        res.setHeader('Content-Type', registration.paymentScreenshotMimeType || 'image/png');
-        res.setHeader('Cache-Control', 'private, max-age=86400');
-        res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot}"`);
-        return res.sendFile(filePath);
+      const candidates = [
+        path.join(UPLOAD_DIR, registration.paymentScreenshot),
+        path.join(process.cwd(), 'uploads', 'receipts', registration.paymentScreenshot),
+        path.join(__dirname, '../../uploads/receipts', registration.paymentScreenshot),
+      ];
+      for (const filePath of candidates) {
+        if (fs.existsSync(filePath)) {
+          const fileBuf = fs.readFileSync(filePath);
+          // Automatically backfill MongoDB Atlas buffer
+          registration.paymentScreenshotData = fileBuf;
+          registration.paymentScreenshotSize = fileBuf.length;
+          await registration.save().catch(() => {});
+
+          const mime = registration.paymentScreenshotMimeType || 'image/jpeg';
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', fileBuf.length);
+          res.setHeader('Cache-Control', 'private, max-age=86400');
+          res.setHeader('Content-Disposition', `inline; filename="${registration.paymentScreenshot}"`);
+          return res.end(fileBuf);
+        }
       }
     }
 

@@ -158,3 +158,48 @@ test('getPaymentReceiptFile returns structured 404 RECEIPT_FILE_UNAVAILABLE when
     SmallSummitRegistration.findOne = origFindOne;
   }
 });
+
+test('getPaymentReceiptFile resolves case-insensitively and streams buffer', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+
+  const mockJpegBuffer = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+  let queryUsed = null;
+  const mockRegistration = {
+    registrationId: 'SS26-00013',
+    paymentScreenshot: 'receipt-SS26-00013.jpg',
+    paymentScreenshotMimeType: 'image/jpeg',
+    paymentScreenshotSize: mockJpegBuffer.length,
+    paymentScreenshotData: mockJpegBuffer,
+  };
+
+  SmallSummitRegistration.findOne = async (q) => {
+    queryUsed = q;
+    return mockRegistration;
+  };
+
+  try {
+    const req = { params: { registrationId: 'ss26-00013' } };
+    const headers = {};
+    let writtenBuffer = null;
+
+    const res = {
+      setHeader: (name, val) => {
+        headers[name.toLowerCase()] = val;
+      },
+      end: (data) => {
+        writtenBuffer = data;
+        return data;
+      },
+      status: (code) => ({ json: (d) => ({ code, d }) }),
+    };
+
+    await getPaymentReceiptFile(req, res);
+
+    assert.ok(queryUsed.$or.some(c => c.registrationId === 'SS26-00013' || c.registrationId === 'ss26-00013'));
+    assert.strictEqual(headers['content-type'], 'image/jpeg');
+    assert.strictEqual(headers['content-length'], mockJpegBuffer.length);
+    assert.deepStrictEqual(writtenBuffer, mockJpegBuffer);
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+  }
+});
