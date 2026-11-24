@@ -1177,6 +1177,21 @@ async function approveSummitRegistration(req, res) {
       return res.status(404).json({ message: 'Registration not found.' });
     }
 
+    // Backend Protection: Check if participant registration & payment are already confirmed
+    const isAlreadyConfirmed =
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.registrationApproved && registration.paymentApproved);
+
+    if (isAlreadyConfirmed) {
+      return res.status(200).json({
+        success: true,
+        alreadyConfirmed: true,
+        message: `Participant ${registration.registrationId} seat and registration details are already confirmed.`,
+        data: registration,
+        isConfirmed: true,
+      });
+    }
+
     registration.registrationApproved = true;
     registration.registrationApprovedAt = new Date();
     registration.registrationApprovedBy = req.admin?.email || 'admin@halalwealth.finance';
@@ -1217,6 +1232,21 @@ async function approveSummitPayment(req, res) {
 
     if (!registration) {
       return res.status(404).json({ message: 'Registration not found.' });
+    }
+
+    // Backend Protection: Check if already confirmed & paid - prevent re-approval or double confirmation
+    const isAlreadyConfirmed =
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.registrationApproved && registration.paymentApproved);
+
+    if (isAlreadyConfirmed) {
+      return res.status(200).json({
+        success: true,
+        alreadyConfirmed: true,
+        message: `Participant ${registration.registrationId} seat and payment are already confirmed.`,
+        data: registration,
+        isConfirmed: true,
+      });
     }
 
     // 1. Verify required registration fields are satisfied:
@@ -1274,6 +1304,21 @@ async function rejectSummitRegistration(req, res) {
       return res.status(404).json({ message: 'Registration not found.' });
     }
 
+    // Backend Protection: Prevent rejecting an already confirmed & paid participant through direct API
+    const isAlreadyConfirmed =
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.registrationApproved && registration.paymentApproved) ||
+      registration.status === 'Checked-In';
+
+    if (isAlreadyConfirmed) {
+      return res.status(400).json({
+        success: false,
+        alreadyConfirmed: true,
+        message: `Cannot reject participant ${registration.registrationId}: Seat is already confirmed and payment is marked as PAID.`,
+        data: registration,
+      });
+    }
+
     registration.registrationApproved = false;
     registration.registrationStatus = 'REJECTED';
     registration.status = 'Rejected';
@@ -1306,6 +1351,21 @@ async function rejectSummitPayment(req, res) {
 
     if (!registration) {
       return res.status(404).json({ message: 'Registration not found.' });
+    }
+
+    // Backend Protection: Prevent rejecting an already confirmed & paid participant through direct API
+    const isAlreadyConfirmed =
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.registrationApproved && registration.paymentApproved) ||
+      registration.status === 'Checked-In';
+
+    if (isAlreadyConfirmed) {
+      return res.status(400).json({
+        success: false,
+        alreadyConfirmed: true,
+        message: `Cannot reject participant ${registration.registrationId}: Seat is already confirmed and payment is marked as PAID.`,
+        data: registration,
+      });
     }
 
     registration.paymentApproved = false;
@@ -1347,6 +1407,21 @@ async function recordOfflinePayment(req, res) {
     const registration = await SummitRegistration.findOne({ registrationId: String(registrationId).trim() });
     if (!registration) {
       return res.status(404).json({ message: 'Registration not found.' });
+    }
+
+    // Backend Protection: Check if already confirmed & paid
+    const isAlreadyConfirmed =
+      (registration.registrationStatus === 'CONFIRMED' && registration.paymentStatus === 'PAID') ||
+      (registration.registrationApproved && registration.paymentApproved);
+
+    if (approvePayment && isAlreadyConfirmed) {
+      return res.status(200).json({
+        success: true,
+        alreadyConfirmed: true,
+        message: `Participant ${registration.registrationId} seat and offline payment are already confirmed.`,
+        data: registration,
+        isConfirmed: true,
+      });
     }
 
     registration.offlinePaymentRecorded = true;

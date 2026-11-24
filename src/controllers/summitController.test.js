@@ -1132,5 +1132,108 @@ test('investorMission confirmation email template includes required subject, dat
   assert.match(content.html, /Abdul Basith/);
 });
 
+test('approveSummitPayment returns alreadyConfirmed when registration is already confirmed and paid', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
+
+  let emailSentCount = 0;
+  investorMissionEmailService.sendInvestorMissionConfirmation = async () => {
+    emailSentCount++;
+    return { success: true };
+  };
+
+  const mockRegistration = {
+    registrationId: 'SS26-00007',
+    fullName: 'Already Confirmed User',
+    email: 'confirmed@example.com',
+    paymentStatus: 'PAID',
+    registrationStatus: 'CONFIRMED',
+    paymentApproved: true,
+    registrationApproved: true,
+    status: 'Confirmed',
+    save: async () => mockRegistration,
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+
+  const req = {
+    params: { registrationId: 'SS26-00007' },
+    body: { adminNotes: 'Duplicate approval attempt' },
+    admin: { email: 'admin@halalwealth.finance' },
+  };
+
+  let statusCode = 200;
+  let jsonResponse = null;
+  const res = {
+    status: (code) => {
+      statusCode = code;
+      return { json: (data) => { jsonResponse = data; } };
+    },
+    json: (data) => { jsonResponse = data; },
+  };
+
+  try {
+    await approveSummitPayment(req, res);
+
+    assert.strictEqual(statusCode, 200);
+    assert.strictEqual(jsonResponse.success, true);
+    assert.strictEqual(jsonResponse.alreadyConfirmed, true);
+    assert.strictEqual(jsonResponse.isConfirmed, true);
+    assert.match(jsonResponse.message, /seat and payment are already confirmed/);
+    assert.strictEqual(emailSentCount, 0, 'Must not send duplicate confirmation email');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+    investorMissionEmailService.sendInvestorMissionConfirmation = origConfirmEmail;
+  }
+});
+
+test('rejectSummitPayment blocks rejecting an already confirmed and paid participant', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+
+  const mockRegistration = {
+    registrationId: 'SS26-00008',
+    fullName: 'Confirmed Participant',
+    email: 'salim@example.com',
+    paymentStatus: 'PAID',
+    registrationStatus: 'CONFIRMED',
+    paymentApproved: true,
+    registrationApproved: true,
+    status: 'Confirmed',
+    save: async () => mockRegistration,
+  };
+
+  SmallSummitRegistration.findOne = async () => mockRegistration;
+
+  const req = {
+    params: { registrationId: 'SS26-00008' },
+    body: { reason: 'Accidental reject attempt' },
+    admin: { email: 'admin@halalwealth.finance' },
+  };
+
+  let statusCode = 0;
+  let jsonResponse = null;
+  const res = {
+    status: (code) => {
+      statusCode = code;
+      return { json: (data) => { jsonResponse = data; } };
+    },
+    json: (data) => { jsonResponse = data; },
+  };
+
+  try {
+    await rejectSummitPayment(req, res);
+
+    assert.strictEqual(statusCode, 400);
+    assert.strictEqual(jsonResponse.success, false);
+    assert.strictEqual(jsonResponse.alreadyConfirmed, true);
+    assert.match(jsonResponse.message, /Cannot reject participant SS26-00008: Seat is already confirmed/);
+    // Ensure state was NOT mutated
+    assert.strictEqual(mockRegistration.paymentStatus, 'PAID');
+    assert.strictEqual(mockRegistration.registrationStatus, 'CONFIRMED');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+  }
+});
+
 
 
