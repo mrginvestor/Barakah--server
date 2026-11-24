@@ -45,7 +45,7 @@ test('validateImageMagicBytes detects valid PNG, JPEG and rejects invalid files'
   } catch (_) {}
 });
 
-test('calculateActiveSeats correctly computes seats with 50 capacity (confirmed seats only)', async () => {
+test('calculateActiveSeats correctly computes seats with 80 capacity (confirmed seats only)', async () => {
   const mockModel = {
     countDocuments: async (query) => {
       if (query?.$or) return 30; // 30 confirmed
@@ -54,22 +54,22 @@ test('calculateActiveSeats correctly computes seats with 50 capacity (confirmed 
   };
 
   const result = await calculateActiveSeats(mockModel);
-  assert.strictEqual(result.maxCapacity, 50);
+  assert.strictEqual(result.maxCapacity, 80);
   assert.strictEqual(result.confirmedCount, 30);
-  assert.strictEqual(result.availableSeats, 20);
+  assert.strictEqual(result.availableSeats, 50); // 80 - 30 = 50
   assert.strictEqual(result.isSoldOut, false);
 });
 
-test('calculateActiveSeats detects sold-out condition when confirmed capacity is 50', async () => {
+test('calculateActiveSeats detects sold-out condition when confirmed capacity is 80', async () => {
   const mockModel = {
     countDocuments: async (query) => {
-      if (query?.$or) return 50; // 50 confirmed
+      if (query?.$or) return 80; // 80 confirmed
       return 0;
     },
   };
 
   const result = await calculateActiveSeats(mockModel);
-  assert.strictEqual(result.confirmedCount, 50);
+  assert.strictEqual(result.confirmedCount, 80);
   assert.strictEqual(result.availableSeats, 0);
   assert.strictEqual(result.isSoldOut, true);
 });
@@ -975,7 +975,7 @@ test('approveSummitPayment verifies payment, marks seat CONFIRMED, generates che
   }
 });
 
-test('approveSummitPayment enforces 50-seat capacity limit and warns without confirming seat', async () => {
+test('approveSummitPayment enforces 80-seat capacity limit and warns without confirming seat', async () => {
   const origFindOne = SmallSummitRegistration.findOne;
   const origCount = SmallSummitRegistration.countDocuments;
   const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
@@ -988,7 +988,7 @@ test('approveSummitPayment enforces 50-seat capacity limit and warns without con
 
   const mockRegistration = {
     _id: 'mock-reg-id-999',
-    registrationId: 'SS26-00051',
+    registrationId: 'SS26-00081',
     fullName: 'Over Capacity Participant',
     email: 'overcapacity@example.com',
     registrationStatus: 'PENDING_APPROVAL',
@@ -998,11 +998,11 @@ test('approveSummitPayment enforces 50-seat capacity limit and warns without con
   };
 
   SmallSummitRegistration.findOne = async () => mockRegistration;
-  // 50 confirmed seats already reached!
-  SmallSummitRegistration.countDocuments = async () => 50;
+  // 80 confirmed seats already reached!
+  SmallSummitRegistration.countDocuments = async () => 80;
 
   const req = {
-    params: { registrationId: 'SS26-00051' },
+    params: { registrationId: 'SS26-00081' },
     body: {},
     admin: { email: 'admin@halalwealth.finance' },
   };
@@ -1026,9 +1026,94 @@ test('approveSummitPayment enforces 50-seat capacity limit and warns without con
     assert.strictEqual(statusCode, 400);
     assert.strictEqual(jsonResponse.success, false);
     assert.strictEqual(jsonResponse.capacityReached, true);
-    assert.match(jsonResponse.message, /capacity \(50 confirmed seats\) has been reached/);
+    assert.match(jsonResponse.message, /capacity \(80 confirmed seats\) has been reached/);
     assert.strictEqual(mockRegistration.registrationStatus, 'PENDING_APPROVAL');
     assert.strictEqual(emailSentCount, 0, 'No confirmation email should be sent when capacity is full');
+  } finally {
+    SmallSummitRegistration.findOne = origFindOne;
+    SmallSummitRegistration.countDocuments = origCount;
+    investorMissionEmailService.sendInvestorMissionConfirmation = origConfirmEmail;
+  }
+});
+
+test('simultaneous admin approvals cannot exceed 80 confirmed seats', async () => {
+  const origFindOne = SmallSummitRegistration.findOne;
+  const origCount = SmallSummitRegistration.countDocuments;
+  const origConfirmEmail = investorMissionEmailService.sendInvestorMissionConfirmation;
+
+  investorMissionEmailService.sendInvestorMissionConfirmation = async () => ({ success: true });
+
+  let confirmedInDb = 79; // Currently 79 confirmed seats out of 80
+
+  const regA = {
+    _id: 'mock-reg-a',
+    registrationId: 'SS26-00080',
+    fullName: 'Participant 80',
+    email: 'p80@example.com',
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    registrationApproved: true,
+    save: async function () {
+      confirmedInDb++;
+      return this;
+    },
+  };
+
+  const regB = {
+    _id: 'mock-reg-b',
+    registrationId: 'SS26-00081',
+    fullName: 'Participant 81',
+    email: 'p81@example.com',
+    registrationStatus: 'PENDING_APPROVAL',
+    paymentStatus: 'PENDING_VERIFICATION',
+    status: 'Pending',
+    registrationApproved: true,
+    save: async function () {
+      confirmedInDb++;
+      return this;
+    },
+  };
+
+  SmallSummitRegistration.findOne = async (query) => {
+    if (query.registrationId === 'SS26-00080') return regA;
+    if (query.registrationId === 'SS26-00081') return regB;
+    return null;
+  };
+
+  SmallSummitRegistration.countDocuments = async () => confirmedInDb;
+
+  const results = [];
+  const makeReqRes = (regId) => {
+    const req = { params: { registrationId: regId }, body: {}, admin: { email: 'admin@halalwealth.finance' } };
+    let code = 200;
+    let body = null;
+    const res = {
+      status(c) { code = c; return this; },
+      json(b) { body = b; results.push({ regId, code, body }); return this; },
+    };
+    return { req, res };
+  };
+
+  try {
+    const call1 = makeReqRes('SS26-00080');
+    const call2 = makeReqRes('SS26-00081');
+
+    await approveSummitPayment(call1.req, call1.res);
+    await approveSummitPayment(call2.req, call2.res);
+
+    assert.strictEqual(results.length, 2);
+    // First one succeeds (taking seat 80)
+    assert.strictEqual(results[0].code, 200);
+    assert.strictEqual(results[0].body.success, true);
+
+    // Second one is blocked because capacity 80 is reached
+    assert.strictEqual(results[1].code, 400);
+    assert.strictEqual(results[1].body.capacityReached, true);
+    assert.match(results[1].body.message, /capacity \(80 confirmed seats\) has been reached/);
+
+    // Total confirmed in DB must not exceed 80
+    assert.strictEqual(confirmedInDb, 80);
   } finally {
     SmallSummitRegistration.findOne = origFindOne;
     SmallSummitRegistration.countDocuments = origCount;

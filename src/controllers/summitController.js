@@ -74,12 +74,12 @@ async function getNextSmallSummitRegistrationId(model = SummitRegistration) {
 }
 
 /**
- * Calculates current confirmed seat count for DEC Summit (capacity: 50 participants).
+ * Calculates current confirmed seat count for Investor Mission 2026 (capacity: 80 participants).
  * Strictly enforces seat management rules:
  * - Pending form submissions, uploads, holds, or offline submissions DO NOT count as confirmed seats.
  * - Single-side approval (registration only or payment only) DOES NOT count as a confirmed seat.
  * - ONLY when BOTH registration AND payment are approved does it count as 1 confirmed seat.
- * Available seats = 50 - confirmed seats.
+ * Available seats = 80 - confirmed seats.
  */
 async function calculateActiveSeats(model = SummitRegistration) {
   const confirmedQuery = {
@@ -94,7 +94,7 @@ async function calculateActiveSeats(model = SummitRegistration) {
     ? await model.countDocuments(confirmedQuery)
     : 0;
 
-  const maxCapacity = SUMMIT_CONFIG.maxCapacity || 50;
+  const maxCapacity = SUMMIT_CONFIG.maxCapacity || 80;
   const availableSeats = Math.max(0, maxCapacity - confirmedCount);
   const isSoldOut = availableSeats <= 0;
 
@@ -249,11 +249,11 @@ async function createSummitRegistration(req, res) {
 
     const cleanPaymentMethod = 'ONLINE';
 
-    // 9. Capacity Check (50 confirmed seats max)
+    // 9. Capacity Check (80 confirmed seats max)
     const capacity = await calculateActiveSeats(SummitRegistration);
     if (capacity.availableSeats <= 0) {
       return res.status(400).json({
-        message: 'DEC Summit Registration Full (maximum capacity of 50 confirmed participants reached).',
+        message: `Investor Mission 2026 Registration Full (maximum capacity of ${SUMMIT_CONFIG.maxCapacity || 80} confirmed participants reached).`,
         isSoldOut: true,
       });
     }
@@ -996,7 +996,7 @@ async function evaluateCombinedApproval(registration, adminEmail, adminNotes) {
       return { success: true, confirmed: true };
     }
 
-    const maxCapacity = SUMMIT_CONFIG.maxCapacity || 50;
+    const maxCapacity = SUMMIT_CONFIG.maxCapacity || 80;
 
     // Check if MongoDB session / transactions available (e.g. MongoDB Atlas replica set)
     const mongoose = require('mongoose');

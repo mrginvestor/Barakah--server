@@ -8,8 +8,8 @@
 const SUMMIT_CONFIG = {
   eventName: 'DEC Summit',
   eventTitle: 'Halal Wealth DEC Summit',
-  subtitle: 'Join an exclusive gathering focused on Islamic finance, halal wealth and financial awareness. Limited to 50 participants.',
-  maxCapacity: 50,
+  subtitle: 'Join an exclusive gathering focused on Islamic finance, halal wealth and financial awareness. Limited to 80 participants.',
+  maxCapacity: 80,
   registrationFee: 500,
   currency: 'INR',
   currencySymbol: '₹',
